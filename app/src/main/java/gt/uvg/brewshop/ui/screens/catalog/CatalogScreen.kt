@@ -14,6 +14,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import gt.uvg.brewshop.domain.formatPriceCents
 import gt.uvg.brewshop.model.Coffee
 import gt.uvg.brewshop.ui.components.StoreScaffold
 import gt.uvg.brewshop.ui.theme.BrewShopTheme
@@ -21,7 +22,7 @@ import androidx.compose.ui.tooling.preview.Preview
 
 @Composable
 fun CatalogScreen(
-    coffees: List<Coffee>,
+    products: List<Coffee>,
     favoriteIds: Set<String>,
     onOpenCoffee: (String) -> Unit,
     onToggleFavorite: (String) -> Unit,
@@ -38,7 +39,7 @@ fun CatalogScreen(
                 .padding(horizontal = 16.dp, vertical = 12.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            coffees.forEach { coffee ->
+            products.forEach { coffee ->
                 Card(modifier = Modifier.fillMaxWidth()) {
                     Column(modifier = Modifier.padding(16.dp)) {
                         Text(
@@ -51,7 +52,7 @@ fun CatalogScreen(
                             style = MaterialTheme.typography.bodyMedium
                         )
                         Text(
-                            text = "Q${"%.2f".format(coffee.price)}",
+                            text = formatPriceCents(coffee.priceCents),
                             modifier = Modifier.padding(top = 10.dp),
                             style = MaterialTheme.typography.titleMedium
                         )
@@ -85,12 +86,14 @@ fun CatalogScreen(
 @Preview(showBackground = true)
 @Composable
 private fun CatalogScreenPreview() {
-    val coffees = listOf(
+    val products = listOf(
         Coffee(
             id = "preview-1",
             name = "Bourbon Antigua",
             description = "Cuerpo redondo y dulzor de panela.",
-            price = 72.0,
+            priceCents = 7200,
+            stock = 12,
+            imageUrl = "https://picsum.photos/seed/preview-1/400/400",
             roasterId = "preview-roaster",
             origin = "Antigua Guatemala",
             altitude = "1,550 msnm",
@@ -101,7 +104,7 @@ private fun CatalogScreenPreview() {
     )
     BrewShopTheme {
         CatalogScreen(
-            coffees = coffees,
+            products = products,
             favoriteIds = setOf("preview-1"),
             onOpenCoffee = {},
             onToggleFavorite = {}

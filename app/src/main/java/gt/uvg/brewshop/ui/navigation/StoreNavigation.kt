@@ -46,7 +46,7 @@ fun StoreNavigation(modifier: Modifier = Modifier) {
         entryProvider = entryProvider {
             entry<StoreNavKey.Catalog> {
                 CatalogScreen(
-                    coffees = uiState.coffees,
+                    products = uiState.visibleProducts,
                     favoriteIds = uiState.favoriteIds,
                     onOpenCoffee = { coffeeId ->
                         backStack.add(StoreNavKey.CoffeeDetail(coffeeId))
@@ -55,7 +55,7 @@ fun StoreNavigation(modifier: Modifier = Modifier) {
                 )
             }
             entry<StoreNavKey.CoffeeDetail> { key ->
-                val coffee = uiState.coffeeById(key.coffeeId)
+                val coffee = uiState.productById(key.coffeeId)
                 val roaster = coffee?.let { uiState.roasterById(it.roasterId) }
 
                 if (coffee != null && roaster != null) {

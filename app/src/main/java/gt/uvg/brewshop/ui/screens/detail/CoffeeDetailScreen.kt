@@ -18,6 +18,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import gt.uvg.brewshop.domain.formatPriceCents
 import gt.uvg.brewshop.model.Coffee
 import gt.uvg.brewshop.ui.components.StoreScaffold
 import gt.uvg.brewshop.ui.theme.BrewShopTheme
@@ -48,7 +49,7 @@ fun CoffeeDetailScreen(
         ) {
             Text(coffee.description, style = MaterialTheme.typography.bodyLarge)
             Text(
-                text = "Q${"%.2f".format(coffee.price)}",
+                text = formatPriceCents(coffee.priceCents),
                 style = MaterialTheme.typography.headlineSmall
             )
             Text(
@@ -97,7 +98,9 @@ private fun CoffeeDetailScreenPreview() {
         id = "preview-1",
         name = "Bourbon Antigua",
         description = "Cuerpo redondo y dulzor de panela.",
-        price = 72.0,
+        priceCents = 7200,
+        stock = 12,
+        imageUrl = "https://picsum.photos/seed/preview-1/400/400",
         roasterId = "preview-roaster",
         origin = "Antigua Guatemala",
         altitude = "1,550 msnm",
