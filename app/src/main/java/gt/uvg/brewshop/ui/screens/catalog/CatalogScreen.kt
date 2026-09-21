@@ -2,16 +2,17 @@ package gt.uvg.brewshop.ui.screens.catalog
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyGridState
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material3.Button
@@ -31,6 +32,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import gt.uvg.brewshop.model.Coffee
+import gt.uvg.brewshop.ui.components.OrderAccessAction
 import gt.uvg.brewshop.ui.components.ProductCard
 import gt.uvg.brewshop.ui.components.StoreScaffold
 import gt.uvg.brewshop.ui.theme.BrewShopTheme
@@ -60,28 +62,31 @@ fun CatalogScreen(
     catalogSize: Int,
     hasNoResults: Boolean,
     favoriteIds: Set<String>,
+    orderUnitCount: Int,
     gridState: LazyGridState,
     onQueryChange: (String) -> Unit,
     onClearQuery: () -> Unit,
     onOpenCoffee: (String) -> Unit,
     onToggleFavorite: (String) -> Unit,
+    onOpenOrder: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val coroutineScope = rememberCoroutineScope()
-    // En la version convencional el scroll lo lleva un ScrollState, no el LazyGridState.
-    val scrollState = rememberScrollState()
     val showScrollToTop by remember {
-        derivedStateOf { scrollState.value > 0 }
+        derivedStateOf { gridState.firstVisibleItemIndex > SCROLL_TO_TOP_THRESHOLD }
     }
 
     StoreScaffold(
         title = "Mi tienda",
         modifier = modifier,
+        actions = {
+            OrderAccessAction(unitCount = orderUnitCount, onClick = onOpenOrder)
+        },
         floatingActionButton = {
             if (showScrollToTop) {
                 FloatingActionButton(
                     onClick = {
-                        coroutineScope.launch { scrollState.animateScrollTo(0) }
+                        coroutineScope.launch { gridState.animateScrollToItem(0) }
                     }
                 ) {
                     Icon(
@@ -131,40 +136,26 @@ fun CatalogScreen(
                     }
                 }
             } else {
-                // VERSION CONVENCIONAL (paso 2): construye las 250 filas de una vez, con
-                // las mismas tarjetas y dimensiones que la version lazy. Solo cambia el
-                // contenedor, para que la comparacion de Logcat mida el contenedor y no
-                // otra diferencia.
-                Column(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .verticalScroll(scrollState)
-                        .padding(
-                            start = 16.dp,
-                            end = 16.dp,
-                            top = 4.dp,
-                            bottom = BOTTOM_CONTENT_PADDING
-                        ),
+                LazyVerticalGrid(
+                    columns = GridCells.Fixed(2),
+                    state = gridState,
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(
+                        start = 16.dp,
+                        end = 16.dp,
+                        top = 4.dp,
+                        bottom = BOTTOM_CONTENT_PADDING
+                    ),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    products.chunked(2).forEach { rowProducts ->
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(12.dp)
-                        ) {
-                            rowProducts.forEach { product ->
-                                ProductCard(
-                                    product = product,
-                                    isFavorite = product.id in favoriteIds,
-                                    onProductClick = onOpenCoffee,
-                                    onToggleFavorite = onToggleFavorite,
-                                    modifier = Modifier.weight(1f)
-                                )
-                            }
-                            if (rowProducts.size == 1) {
-                                Spacer(modifier = Modifier.weight(1f))
-                            }
-                        }
+                    items(products, key = { it.id }) { product ->
+                        ProductCard(
+                            product = product,
+                            isFavorite = product.id in favoriteIds,
+                            onProductClick = onOpenCoffee,
+                            onToggleFavorite = onToggleFavorite
+                        )
                     }
                 }
             }
@@ -199,11 +190,13 @@ private fun CatalogScreenPreview() {
             catalogSize = products.size,
             hasNoResults = false,
             favoriteIds = setOf("preview-1"),
+            orderUnitCount = 2,
             gridState = rememberLazyGridState(),
             onQueryChange = {},
             onClearQuery = {},
             onOpenCoffee = {},
-            onToggleFavorite = {}
+            onToggleFavorite = {},
+            onOpenOrder = {}
         )
     }
 }

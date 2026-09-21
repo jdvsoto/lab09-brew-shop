@@ -1,10 +1,8 @@
 package gt.uvg.brewshop.ui.components
 
 import android.util.Log
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.aspectRatio
@@ -33,7 +31,7 @@ import gt.uvg.brewshop.ui.theme.BrewShopTheme
  * Sonda de composicion del paso 2. Se deja en true mientras se toman las mediciones con
  * Logcat y se pone en false antes de la entrega final, que es lo que pide el laboratorio.
  */
-private const val COMPOSITION_PROBE_ENABLED = true
+private const val COMPOSITION_PROBE_ENABLED = false
 
 private const val PROBE_TAG = "CatalogProbe"
 
@@ -70,14 +68,12 @@ fun ProductCard(
             .fillMaxWidth()
             .clickable { onProductClick(product.id) }
     ) {
-        // Imagen local durante la comparacion de contenedores: las dos versiones deben
-        // medir el mismo trabajo de composicion, sin que la red intervenga. Coil entra
-        // despues, ya sobre la version lazy.
-        Box(
+        ProductImage(
+            imageUrl = product.imageUrl,
+            contentDescription = product.name,
             modifier = Modifier
                 .fillMaxWidth()
                 .aspectRatio(1f)
-                .background(MaterialTheme.colorScheme.surfaceVariant)
         )
 
         Column(
