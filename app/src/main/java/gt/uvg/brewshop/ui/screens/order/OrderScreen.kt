@@ -64,6 +64,8 @@ fun OrderScreen(
     onMessageShown: () -> Unit,
     onBackToCatalog: () -> Unit,
     onBack: () -> Unit,
+    canCheckout: Boolean,
+    onContinueToCheckout: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val snackbarHostState = remember { SnackbarHostState() }
@@ -113,7 +115,11 @@ fun OrderScreen(
 
             // El total se calcula a partir de las lineas vigentes, por lo que al vaciar el
             // pedido queda en Q0.00 y no sobrevive ningun importe anterior.
-            OrderTotal(totalCents = totalCents)
+            OrderTotal(
+                totalCents = totalCents,
+                canCheckout = canCheckout,
+                onContinueToCheckout = onContinueToCheckout
+            )
         }
     }
 }
@@ -140,7 +146,12 @@ private fun EmptyOrder(
 }
 
 @Composable
-private fun OrderTotal(totalCents: Int, modifier: Modifier = Modifier) {
+private fun OrderTotal(
+    totalCents: Int,
+    canCheckout: Boolean,
+    onContinueToCheckout: () -> Unit,
+    modifier: Modifier = Modifier
+) {
     Surface(
         modifier = modifier.fillMaxWidth(),
         color = MaterialTheme.colorScheme.surfaceContainerHigh
@@ -160,6 +171,15 @@ private fun OrderTotal(totalCents: Int, modifier: Modifier = Modifier) {
                     style = MaterialTheme.typography.headlineSmall,
                     color = MaterialTheme.colorScheme.primary
                 )
+            }
+            Button(
+                onClick = onContinueToCheckout,
+                enabled = canCheckout,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = 16.dp, end = 16.dp, bottom = 16.dp)
+            ) {
+                Text("Continuar al checkout")
             }
         }
     }
@@ -279,6 +299,8 @@ private fun OrderScreenPreview() {
             onRemove = {},
             onMessageShown = {},
             onBackToCatalog = {},
+            canCheckout = true,
+            onContinueToCheckout = {},
             onBack = {}
         )
     }
@@ -297,6 +319,8 @@ private fun OrderScreenEmptyPreview() {
             onRemove = {},
             onMessageShown = {},
             onBackToCatalog = {},
+            canCheckout = false,
+            onContinueToCheckout = {},
             onBack = {}
         )
     }
