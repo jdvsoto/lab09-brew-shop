@@ -9,8 +9,10 @@ import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
@@ -21,6 +23,8 @@ import androidx.navigation3.runtime.entryProvider
 import androidx.navigation3.runtime.rememberNavBackStack
 import androidx.navigation3.ui.NavDisplay
 import gt.uvg.brewshop.ui.screens.catalog.CatalogScreen
+import gt.uvg.brewshop.ui.screens.checkout.CheckoutScreen
+import gt.uvg.brewshop.ui.screens.confirmation.OrderConfirmationScreen
 import gt.uvg.brewshop.ui.screens.detail.CoffeeDetailScreen
 import gt.uvg.brewshop.ui.screens.order.OrderScreen
 import gt.uvg.brewshop.ui.screens.roaster.RoasterProfileScreen
@@ -43,6 +47,12 @@ sealed interface StoreNavKey : NavKey {
 
     @Serializable
     data object Order : StoreNavKey
+
+    @Serializable
+    data object Checkout : StoreNavKey
+
+    @Serializable
+    data object OrderConfirmation : StoreNavKey
 }
 
 @Composable
@@ -143,6 +153,7 @@ fun StoreNavigation(modifier: Modifier = Modifier) {
                         roasterName = roaster.name,
                         isFavorite = uiState.isFavorite(coffee.id),
                         quantityInOrder = uiState.orderQuantityOf(coffee.id),
+                        canAddToOrder = uiState.canAddToOrder(coffee.id),
                         orderUnitCount = uiState.orderUnitCount,
                         message = uiState.message,
                         onToggleFavorite = { storeViewModel.toggleFavorite(coffee.id) },
@@ -173,8 +184,62 @@ fun StoreNavigation(modifier: Modifier = Modifier) {
                             backStack.removeLastOrNull()
                         }
                     },
+                    onBack = { backStack.removeLastOrNull() },
+                    canCheckout = uiState.canCheckout,
+                    onContinueToCheckout = { backStack.add(StoreNavKey.Checkout) }
+                )
+            }
+            entry<StoreNavKey.Checkout> {
+                val checkoutState = storeViewModel.checkoutUiState.collectAsStateWithLifecycle()
+                val orderUnitsState = storeViewModel.orderUnits.collectAsStateWithLifecycle()
+                // Se recuerdan los objetos State y no sus valores: el estado derivado se crea
+                // una sola vez y solo avisa cuando el resultado cambia.
+                val isConfirmEnabled by remember(checkoutState, orderUnitsState) {
+                    derivedStateOf {
+                        checkoutState.value.isFormValid && orderUnitsState.value > 0
+                    }
+                }
+
+                CheckoutScreen(
+                    uiState = checkoutState.value,
+                    orderItems = uiState.orderItems,
+                    orderUnitCount = uiState.orderUnitCount,
+                    totalCents = uiState.orderTotalCents,
+                    isConfirmEnabled = isConfirmEnabled,
+                    onFullNameChange = storeViewModel::onFullNameChange,
+                    onPhoneChange = storeViewModel::onPhoneChange,
+                    onBillingTypeChange = storeViewModel::onBillingTypeChange,
+                    onNitChange = storeViewModel::onNitChange,
+                    onBusinessNameChange = storeViewModel::onBusinessNameChange,
+                    onPaymentMethodChange = storeViewModel::onPaymentMethodChange,
+                    onConfirmOrder = {
+                        if (storeViewModel.confirmOrder()) {
+                            // El pedido ya quedo vacio: ni el pedido ni el checkout deben
+                            // quedar en la pila, asi Atras desde el recibo vuelve al catalogo.
+                            while (backStack.size > 1) {
+                                backStack.removeLastOrNull()
+                            }
+                            backStack.add(StoreNavKey.OrderConfirmation)
+                        }
+                    },
                     onBack = { backStack.removeLastOrNull() }
                 )
+            }
+            entry<StoreNavKey.OrderConfirmation> {
+                val receipt = uiState.lastReceipt
+
+                if (receipt != null) {
+                    OrderConfirmationScreen(
+                        receipt = receipt,
+                        onBackToCatalog = {
+                            while (backStack.size > 1) {
+                                backStack.removeLastOrNull()
+                            }
+                        }
+                    )
+                } else {
+                    Text("No hay una orden confirmada.")
+                }
             }
             entry<StoreNavKey.RoasterProfile> { key ->
                 val roaster = uiState.roasterById(key.roasterId)
