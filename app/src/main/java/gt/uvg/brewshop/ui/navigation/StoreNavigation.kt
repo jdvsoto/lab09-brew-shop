@@ -153,6 +153,7 @@ fun StoreNavigation(modifier: Modifier = Modifier) {
                         roasterName = roaster.name,
                         isFavorite = uiState.isFavorite(coffee.id),
                         quantityInOrder = uiState.orderQuantityOf(coffee.id),
+                        canAddToOrder = uiState.canAddToOrder(coffee.id),
                         orderUnitCount = uiState.orderUnitCount,
                         message = uiState.message,
                         onToggleFavorite = { storeViewModel.toggleFavorite(coffee.id) },
@@ -213,6 +214,11 @@ fun StoreNavigation(modifier: Modifier = Modifier) {
                     onPaymentMethodChange = storeViewModel::onPaymentMethodChange,
                     onConfirmOrder = {
                         if (storeViewModel.confirmOrder()) {
+                            // El pedido ya quedo vacio: ni el pedido ni el checkout deben
+                            // quedar en la pila, asi Atras desde el recibo vuelve al catalogo.
+                            while (backStack.size > 1) {
+                                backStack.removeLastOrNull()
+                            }
                             backStack.add(StoreNavKey.OrderConfirmation)
                         }
                     },
