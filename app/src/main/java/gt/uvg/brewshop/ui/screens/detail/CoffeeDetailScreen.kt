@@ -39,7 +39,8 @@ import gt.uvg.brewshop.ui.theme.BrewShopTheme
  * No tiene ViewModel propio: recibe valores ya resueltos y devuelve intenciones por
  * callback. [quantityInOrder] son las unidades de ESTE producto ya pedidas y
  * [orderUnitCount] el total del pedido, que es lo que muestra el acceso de la barra
- * superior; son numeros distintos y por eso viajan por separado.
+ * superior; son numeros distintos y por eso viajan por separado. [canAddToOrder] llega
+ * resuelto desde el estado: la pantalla no decide si agregar se permite.
  *
  * Agregar al pedido no navega: la confirmacion o el rechazo aparecen aqui mismo como
  * Snackbar y el resumen del pedido solo se abre si la persona lo pide.
@@ -50,6 +51,7 @@ fun CoffeeDetailScreen(
     roasterName: String,
     isFavorite: Boolean,
     quantityInOrder: Int,
+    canAddToOrder: Boolean,
     orderUnitCount: Int,
     message: String?,
     onToggleFavorite: () -> Unit,
@@ -70,10 +72,6 @@ fun CoffeeDetailScreen(
         snackbarHostState.showSnackbar(current, duration = SnackbarDuration.Short)
         onMessageShown()
     }
-
-    // Deshabilitar el boton es solo una ayuda visual: quien valida las existencias es
-    // addToOrder en el dominio, y lo sigue haciendo aunque este boton no existiera.
-    val canAdd = coffee.stock > 0 && quantityInOrder < coffee.stock
 
     StoreScaffold(
         title = coffee.name,
@@ -117,14 +115,15 @@ fun CoffeeDetailScreen(
             Text(coffee.description, style = MaterialTheme.typography.bodyLarge)
 
             // Accion principal, separada de las secundarias por jerarquia visual.
+            // Deshabilitarla es solo una ayuda: addToOrder en el dominio sigue validando.
             Button(
                 onClick = onAddToOrder,
-                enabled = canAdd,
+                enabled = canAddToOrder,
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Text("Agregar al pedido")
             }
-            if (!canAdd) {
+            if (!canAddToOrder) {
                 Text(
                     text = if (coffee.stock == 0) {
                         "Producto agotado."
@@ -199,6 +198,7 @@ private fun CoffeeDetailScreenPreview() {
             roasterName = "Tostaduria La Bendicion",
             isFavorite = true,
             quantityInOrder = 2,
+            canAddToOrder = true,
             orderUnitCount = 3,
             message = null,
             onToggleFavorite = {},

@@ -1,15 +1,22 @@
 package gt.uvg.brewshop.ui.store
 
 import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
 import gt.uvg.brewshop.domain.OrderResult
 import gt.uvg.brewshop.domain.buildCatalog
+import gt.uvg.brewshop.domain.createOrderReceipt
 import gt.uvg.brewshop.domain.filterProductsByName
 import gt.uvg.brewshop.domain.imageUrlFor
+import gt.uvg.brewshop.model.BillingType
 import gt.uvg.brewshop.model.Coffee
+import gt.uvg.brewshop.model.PaymentMethod
 import gt.uvg.brewshop.model.Roaster
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import gt.uvg.brewshop.domain.addToOrder as applyAddToOrder
 import gt.uvg.brewshop.domain.decreaseOrderLine as applyDecreaseOrderLine
@@ -31,6 +38,18 @@ class StoreViewModel : ViewModel() {
     // sobrevive a la rotacion, los productos, sus precios y sus IDs no cambian.
     private val _uiState = MutableStateFlow(buildInitialState())
     val uiState: StateFlow<StoreUiState> = _uiState.asStateFlow()
+
+    private val _checkoutUiState = MutableStateFlow(CheckoutUiState())
+    val checkoutUiState: StateFlow<CheckoutUiState> = _checkoutUiState.asStateFlow()
+
+    // Declarado despues de _uiState, que debe existir antes de derivar de el.
+    val orderUnits: StateFlow<Int> = _uiState
+        .map { it.orderUnitCount }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, _uiState.value.orderUnitCount)
+
+    // Vive fuera del formulario, asi que reiniciarlo no lo toca. Sobrevive a la rotacion
+    // porque el ViewModel sobrevive, y solo aumenta al confirmar una compra valida.
+    private var confirmedOrderCount = 0
 
     /** Actualiza la consulta y recalcula una sola vez la lista visible. */
     fun onQueryChange(query: String) {
@@ -97,6 +116,74 @@ class StoreViewModel : ViewModel() {
             }
             current.copy(favoriteIds = favorites)
         }
+    }
+
+    fun onFullNameChange(value: String) {
+        _checkoutUiState.update { it.copy(fullName = it.fullName.edited(value)) }
+    }
+
+    fun onPhoneChange(value: String) {
+        _checkoutUiState.update { it.copy(phone = it.phone.edited(value)) }
+    }
+
+    fun onNitChange(value: String) {
+        _checkoutUiState.update { it.copy(nit = it.nit.edited(value)) }
+    }
+
+    fun onBusinessNameChange(value: String) {
+        _checkoutUiState.update { it.copy(businessName = it.businessName.edited(value)) }
+    }
+
+    fun onPaymentMethodChange(paymentMethod: PaymentMethod) {
+        _checkoutUiState.update { it.copy(paymentMethod = paymentMethod) }
+    }
+
+    /**
+     * Limpieza en cascada. Al pasar a CF, NIT y razon social dejan de estar tocados; sus
+     * errores ya dan null porque en CF no se calculan, y el texto se conserva para no
+     * obligar a reescribirlo. Al pasar a NIT no hace falta nada mas: los errores fiscales
+     * se recalculan solos y bloquean el boton, pero siguen ocultos hasta una nueva edicion.
+     */
+    fun onBillingTypeChange(billingType: BillingType) {
+        _checkoutUiState.update { current ->
+            when (billingType) {
+                BillingType.CF -> current.copy(
+                    billingType = billingType,
+                    nit = current.nit.copy(isTouched = false),
+                    businessName = current.businessName.copy(isTouched = false)
+                )
+
+                BillingType.NIT -> current.copy(billingType = billingType)
+            }
+        }
+    }
+
+    /**
+     * Confirma la compra y devuelve true si lo hizo. Vuelve a comprobar el formulario y las
+     * unidades aunque el boton ya lo haga, porque deshabilitar un boton no es validar. Si
+     * algo falla no cambia nada: ni el contador, ni el pedido, ni el formulario.
+     */
+    fun confirmOrder(): Boolean {
+        val form = _checkoutUiState.value
+        val store = _uiState.value
+        if (!form.isFormValid || store.orderUnitCount == 0) return false
+
+        confirmedOrderCount += 1
+        val receipt = createOrderReceipt(
+            orderNumber = confirmedOrderCount,
+            customerName = form.fullName.value,
+            phone = form.phone.value,
+            billingType = form.billingType,
+            nit = form.nit.value,
+            businessName = form.businessName.value,
+            paymentMethod = form.paymentMethod,
+            unitCount = store.orderUnitCount,
+            totalCents = store.orderTotalCents
+        )
+
+        _uiState.update { it.copy(orderLines = emptyList(), lastReceipt = receipt, message = null) }
+        _checkoutUiState.value = CheckoutUiState()
+        return true
     }
 }
 

@@ -1,12 +1,15 @@
 package gt.uvg.brewshop.ui.store
 
 import gt.uvg.brewshop.domain.OrderItem
+import gt.uvg.brewshop.domain.OrderResult
+import gt.uvg.brewshop.domain.addToOrder
 import gt.uvg.brewshop.domain.orderItems
 import gt.uvg.brewshop.domain.orderTotalCents
 import gt.uvg.brewshop.domain.orderUnitCount
 import gt.uvg.brewshop.domain.quantityOf
 import gt.uvg.brewshop.model.Coffee
 import gt.uvg.brewshop.model.OrderLine
+import gt.uvg.brewshop.model.OrderReceipt
 import gt.uvg.brewshop.model.Roaster
 
 /**
@@ -28,7 +31,9 @@ data class StoreUiState(
     val query: String = "",
     val visibleProducts: List<Coffee> = emptyList(),
     val orderLines: List<OrderLine> = emptyList(),
-    val message: String? = null
+    val message: String? = null,
+    // Vive aqui y no en el formulario: reiniciar el checkout no debe borrar el recibo.
+    val lastReceipt: OrderReceipt? = null
 ) {
     /** Cuantos productos tiene el catalogo completo, para el contador "N de M". */
     val catalogSize: Int get() = products.size
@@ -49,6 +54,16 @@ data class StoreUiState(
     val orderTotalCents: Int get() = orderTotalCents(orderLines, products)
 
     val isOrderEmpty: Boolean get() = orderLines.isEmpty()
+
+    /** Se puede ir al checkout solo con al menos una unidad en el pedido. */
+    val canCheckout: Boolean get() = orderUnitCount > 0
+
+    /**
+     * Si agregar una unidad seria aceptado. Reutiliza la regla del dominio en lugar de
+     * repetirla, para que la pantalla lea la respuesta en vez de calcularla.
+     */
+    fun canAddToOrder(productId: String): Boolean =
+        addToOrder(orderLines, products, productId) is OrderResult.Success
 
     fun isFavorite(productId: String): Boolean = productId in favoriteIds
 
