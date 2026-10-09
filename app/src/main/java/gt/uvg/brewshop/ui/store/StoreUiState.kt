@@ -7,6 +7,7 @@ import gt.uvg.brewshop.domain.orderItems
 import gt.uvg.brewshop.domain.orderTotalCents
 import gt.uvg.brewshop.domain.orderUnitCount
 import gt.uvg.brewshop.domain.quantityOf
+import gt.uvg.brewshop.model.CatalogSortOrder
 import gt.uvg.brewshop.model.Coffee
 import gt.uvg.brewshop.model.OrderLine
 import gt.uvg.brewshop.model.OrderReceipt
@@ -33,7 +34,10 @@ data class StoreUiState(
     val orderLines: List<OrderLine> = emptyList(),
     val message: String? = null,
     // Vive aqui y no en el formulario: reiniciar el checkout no debe borrar el recibo.
-    val lastReceipt: OrderReceipt? = null
+    val lastReceipt: OrderReceipt? = null,
+    val sortOrder: CatalogSortOrder = CatalogSortOrder.NAME,
+    // False mientras los datos guardados en disco todavia no llegan, al abrir la app.
+    val isLoaded: Boolean = true
 ) {
     /** Cuantos productos tiene el catalogo completo, para el contador "N de M". */
     val catalogSize: Int get() = products.size
