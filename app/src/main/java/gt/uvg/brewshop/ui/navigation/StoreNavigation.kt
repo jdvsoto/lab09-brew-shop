@@ -28,6 +28,7 @@ import gt.uvg.brewshop.ui.screens.confirmation.OrderConfirmationScreen
 import gt.uvg.brewshop.ui.screens.detail.CoffeeDetailScreen
 import gt.uvg.brewshop.ui.screens.order.OrderScreen
 import gt.uvg.brewshop.ui.screens.roaster.RoasterProfileScreen
+import gt.uvg.brewshop.ui.store.OrderSubmissionState
 import gt.uvg.brewshop.ui.store.StoreViewModel
 import kotlinx.serialization.Serializable
 
@@ -192,11 +193,14 @@ fun StoreNavigation(modifier: Modifier = Modifier) {
             entry<StoreNavKey.Checkout> {
                 val checkoutState = storeViewModel.checkoutUiState.collectAsStateWithLifecycle()
                 val orderUnitsState = storeViewModel.orderUnits.collectAsStateWithLifecycle()
+                val submissionState = storeViewModel.submissionState.collectAsStateWithLifecycle()
                 // Se recuerdan los objetos State y no sus valores: el estado derivado se crea
                 // una sola vez y solo avisa cuando el resultado cambia.
-                val isConfirmEnabled by remember(checkoutState, orderUnitsState) {
+                val isConfirmEnabled by remember(checkoutState, orderUnitsState, submissionState) {
                     derivedStateOf {
-                        checkoutState.value.isFormValid && orderUnitsState.value > 0
+                        checkoutState.value.isFormValid &&
+                            orderUnitsState.value > 0 &&
+                            submissionState.value !is OrderSubmissionState.Sending
                     }
                 }
 
@@ -213,12 +217,9 @@ fun StoreNavigation(modifier: Modifier = Modifier) {
                     onBusinessNameChange = storeViewModel::onBusinessNameChange,
                     onPaymentMethodChange = storeViewModel::onPaymentMethodChange,
                     onConfirmOrder = {
+                        // La confirmacion se abre de inmediato y muestra el progreso del envio.
+                        // El checkout queda debajo para volver a el si el envio falla.
                         if (storeViewModel.confirmOrder()) {
-                            // El pedido ya quedo vacio: ni el pedido ni el checkout deben
-                            // quedar en la pila, asi Atras desde el recibo vuelve al catalogo.
-                            while (backStack.size > 1) {
-                                backStack.removeLastOrNull()
-                            }
                             backStack.add(StoreNavKey.OrderConfirmation)
                         }
                     },
@@ -226,20 +227,29 @@ fun StoreNavigation(modifier: Modifier = Modifier) {
                 )
             }
             entry<StoreNavKey.OrderConfirmation> {
-                val receipt = uiState.lastReceipt
-
-                if (receipt != null) {
-                    OrderConfirmationScreen(
-                        receipt = receipt,
-                        onBackToCatalog = {
-                            while (backStack.size > 1) {
-                                backStack.removeLastOrNull()
-                            }
-                        }
-                    )
-                } else {
-                    Text("No hay una orden confirmada.")
+                val submission by storeViewModel.submissionState.collectAsStateWithLifecycle()
+                val backToCatalog = {
+                    while (backStack.size > 1) {
+                        backStack.removeLastOrNull()
+                    }
                 }
+
+                // Mientras se espera al servidor no se sale: el resultado llegaria a una
+                // pantalla que ya no esta visible.
+                BackHandler(enabled = submission is OrderSubmissionState.Sending) { }
+                // Tras el exito el pedido ya esta vacio: Atras lleva al catalogo, no al checkout.
+                BackHandler(enabled = submission is OrderSubmissionState.Sent) { backToCatalog() }
+
+                OrderConfirmationScreen(
+                    submission = submission,
+                    receipt = uiState.lastReceipt,
+                    pendingTotalCents = uiState.orderTotalCents,
+                    onRetry = { storeViewModel.confirmOrder() },
+                    onBackToCheckout = { backStack.removeLastOrNull() },
+                    // La Parte 3 lo conecta con "Mis pedidos".
+                    onOpenOrders = backToCatalog,
+                    onBackToCatalog = backToCatalog
+                )
             }
             entry<StoreNavKey.RoasterProfile> { key ->
                 val roaster = uiState.roasterById(key.roasterId)
