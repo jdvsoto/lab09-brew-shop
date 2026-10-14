@@ -26,8 +26,12 @@ import gt.uvg.brewshop.ui.screens.catalog.CatalogScreen
 import gt.uvg.brewshop.ui.screens.checkout.CheckoutScreen
 import gt.uvg.brewshop.ui.screens.confirmation.OrderConfirmationScreen
 import gt.uvg.brewshop.ui.screens.detail.CoffeeDetailScreen
+import gt.uvg.brewshop.ui.orders.OrdersViewModel
 import gt.uvg.brewshop.ui.screens.order.OrderScreen
+import gt.uvg.brewshop.ui.screens.orders.OrderDetailScreen
+import gt.uvg.brewshop.ui.screens.orders.OrdersScreen
 import gt.uvg.brewshop.ui.screens.roaster.RoasterProfileScreen
+import gt.uvg.brewshop.ui.store.OrderSubmissionState
 import gt.uvg.brewshop.ui.store.StoreViewModel
 import kotlinx.serialization.Serializable
 
@@ -53,6 +57,12 @@ sealed interface StoreNavKey : NavKey {
 
     @Serializable
     data object OrderConfirmation : StoreNavKey
+
+    @Serializable
+    data object Orders : StoreNavKey
+
+    @Serializable
+    data class OrderDetail(val orderId: String) : StoreNavKey
 }
 
 @Composable
@@ -60,6 +70,20 @@ fun StoreNavigation(modifier: Modifier = Modifier) {
     val backStack = rememberNavBackStack(StoreNavKey.Catalog)
     val storeViewModel: StoreViewModel = viewModel()
     val uiState by storeViewModel.uiState.collectAsStateWithLifecycle()
+    // "Mis pedidos" es otra feature, con su propio ViewModel obtenido tambien en la raiz.
+    val ordersViewModel: OrdersViewModel = viewModel()
+
+    // Cada carga remota responde al evento que abre su pantalla, no a su composicion: asi
+    // rotar no repite la solicitud y un pedido recien enviado aparece al abrir la lista.
+    val openOrders: () -> Unit = {
+        ordersViewModel.loadOrders()
+        backStack.add(StoreNavKey.Orders)
+    }
+    val backToCatalog: () -> Unit = {
+        while (backStack.size > 1) {
+            backStack.removeLastOrNull()
+        }
+    }
 
     // El estado de scroll de la cuadricula es de la UI, no del ViewModel. Se crea aqui,
     // por encima de NavDisplay, para que sobreviva a ir al detalle y volver: la entrada
@@ -138,7 +162,8 @@ fun StoreNavigation(modifier: Modifier = Modifier) {
                         backStack.add(StoreNavKey.CoffeeDetail(coffeeId))
                     },
                     onToggleFavorite = storeViewModel::toggleFavorite,
-                    onOpenOrder = { backStack.add(StoreNavKey.Order) }
+                    onOpenOrder = { backStack.add(StoreNavKey.Order) },
+                    onOpenOrders = openOrders
                 )
             }
             entry<StoreNavKey.CoffeeDetail> { key ->
@@ -192,11 +217,14 @@ fun StoreNavigation(modifier: Modifier = Modifier) {
             entry<StoreNavKey.Checkout> {
                 val checkoutState = storeViewModel.checkoutUiState.collectAsStateWithLifecycle()
                 val orderUnitsState = storeViewModel.orderUnits.collectAsStateWithLifecycle()
+                val submissionState = storeViewModel.submissionState.collectAsStateWithLifecycle()
                 // Se recuerdan los objetos State y no sus valores: el estado derivado se crea
                 // una sola vez y solo avisa cuando el resultado cambia.
-                val isConfirmEnabled by remember(checkoutState, orderUnitsState) {
+                val isConfirmEnabled by remember(checkoutState, orderUnitsState, submissionState) {
                     derivedStateOf {
-                        checkoutState.value.isFormValid && orderUnitsState.value > 0
+                        checkoutState.value.isFormValid &&
+                            orderUnitsState.value > 0 &&
+                            submissionState.value !is OrderSubmissionState.Sending
                     }
                 }
 
@@ -213,12 +241,9 @@ fun StoreNavigation(modifier: Modifier = Modifier) {
                     onBusinessNameChange = storeViewModel::onBusinessNameChange,
                     onPaymentMethodChange = storeViewModel::onPaymentMethodChange,
                     onConfirmOrder = {
+                        // La confirmacion se abre de inmediato y muestra el progreso del envio.
+                        // El checkout queda debajo para volver a el si el envio falla.
                         if (storeViewModel.confirmOrder()) {
-                            // El pedido ya quedo vacio: ni el pedido ni el checkout deben
-                            // quedar en la pila, asi Atras desde el recibo vuelve al catalogo.
-                            while (backStack.size > 1) {
-                                backStack.removeLastOrNull()
-                            }
                             backStack.add(StoreNavKey.OrderConfirmation)
                         }
                     },
@@ -226,20 +251,58 @@ fun StoreNavigation(modifier: Modifier = Modifier) {
                 )
             }
             entry<StoreNavKey.OrderConfirmation> {
-                val receipt = uiState.lastReceipt
+                val submission by storeViewModel.submissionState.collectAsStateWithLifecycle()
 
-                if (receipt != null) {
-                    OrderConfirmationScreen(
-                        receipt = receipt,
-                        onBackToCatalog = {
-                            while (backStack.size > 1) {
-                                backStack.removeLastOrNull()
-                            }
-                        }
-                    )
-                } else {
-                    Text("No hay una orden confirmada.")
+                // Mientras se espera al servidor no se sale: el resultado llegaria a una
+                // pantalla que ya no esta visible.
+                BackHandler(enabled = submission is OrderSubmissionState.Sending) { }
+                // Tras el exito el pedido ya esta vacio: Atras lleva al catalogo, no al checkout.
+                BackHandler(enabled = submission is OrderSubmissionState.Sent) { backToCatalog() }
+
+                OrderConfirmationScreen(
+                    submission = submission,
+                    receipt = uiState.lastReceipt,
+                    pendingTotalCents = uiState.orderTotalCents,
+                    onRetry = { storeViewModel.confirmOrder() },
+                    onBackToCheckout = { backStack.removeLastOrNull() },
+                    // La pila queda [Catalog, Orders]: Atras desde la lista vuelve al catalogo.
+                    onOpenOrders = {
+                        backToCatalog()
+                        openOrders()
+                    },
+                    onBackToCatalog = backToCatalog
+                )
+            }
+            entry<StoreNavKey.Orders> {
+                val ordersUiState by ordersViewModel.ordersUiState.collectAsStateWithLifecycle()
+
+                OrdersScreen(
+                    uiState = ordersUiState,
+                    onOpenOrder = { orderId ->
+                        ordersViewModel.loadOrderDetail(orderId)
+                        backStack.add(StoreNavKey.OrderDetail(orderId))
+                    },
+                    onRetry = ordersViewModel::loadOrders,
+                    onRefresh = ordersViewModel::loadOrders,
+                    onGoToCatalog = backToCatalog,
+                    onBack = { backStack.removeLastOrNull() }
+                )
+            }
+            entry<StoreNavKey.OrderDetail> { key ->
+                val detailUiState by ordersViewModel.orderDetailUiState.collectAsStateWithLifecycle()
+                val backToOrders = {
+                    backStack.removeLastOrNull()
+                    // Se recarga para que un pedido borrado en el servidor deje de aparecer.
+                    ordersViewModel.loadOrders()
                 }
+
+                BackHandler { backToOrders() }
+
+                OrderDetailScreen(
+                    uiState = detailUiState,
+                    onRetry = { ordersViewModel.loadOrderDetail(key.orderId) },
+                    onBackToOrders = backToOrders
+                )
             }
             entry<StoreNavKey.RoasterProfile> { key ->
                 val roaster = uiState.roasterById(key.roasterId)
