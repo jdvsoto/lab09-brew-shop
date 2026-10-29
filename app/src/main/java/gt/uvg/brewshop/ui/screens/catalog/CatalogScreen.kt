@@ -1,8 +1,10 @@
 package gt.uvg.brewshop.ui.screens.catalog
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -17,7 +19,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -33,10 +37,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import gt.uvg.brewshop.model.CatalogSortOrder
 import gt.uvg.brewshop.model.Coffee
 import gt.uvg.brewshop.ui.components.OrderAccessAction
 import gt.uvg.brewshop.ui.components.ProductCard
 import gt.uvg.brewshop.ui.components.StoreScaffold
+import gt.uvg.brewshop.ui.components.displayName
 import gt.uvg.brewshop.ui.theme.BrewShopTheme
 import kotlinx.coroutines.launch
 
@@ -54,6 +60,9 @@ private val BOTTOM_CONTENT_PADDING = 96.dp
  * envuelve a NavDisplay, respectivamente), por lo que la posicion de scroll sobrevive a
  * ir al detalle y volver, y la consulta se reinicia solo cuando cambia de verdad, no cada
  * vez que esta pantalla vuelve a componerse.
+ *
+ * Tampoco ordena: [products] llega ya ordenado por el ViewModel segun [sortOrder], y la
+ * pantalla solo avisa con [onSortOrderChange] que orden eligio la persona.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -72,6 +81,9 @@ fun CatalogScreen(
     onToggleFavorite: (String) -> Unit,
     onOpenOrder: () -> Unit,
     onOpenOrders: () -> Unit,
+    sortOrder: CatalogSortOrder,
+    isLoaded: Boolean,
+    onSortOrderChange: (CatalogSortOrder) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val coroutineScope = rememberCoroutineScope()
@@ -123,8 +135,36 @@ fun CatalogScreen(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
             )
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Ordenar por:",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                CatalogSortOrder.entries.forEach { order ->
+                    FilterChip(
+                        selected = sortOrder == order,
+                        onClick = { onSortOrderChange(order) },
+                        label = { Text(order.displayName()) }
+                    )
+                }
+            }
 
-            if (hasNoResults) {
+            if (!isLoaded) {
+                // Hasta que llegan los datos guardados en disco no se muestra la cuadricula:
+                // se veria un instante en el orden por defecto y sin pedido.
+                Box(
+                    modifier = Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center
+                ) {
+                    CircularProgressIndicator()
+                }
+            } else if (hasNoResults) {
                 Column(
                     modifier = Modifier
                         .fillMaxSize()
@@ -204,6 +244,9 @@ private fun CatalogScreenPreview() {
             onToggleFavorite = {},
             onOpenOrder = {},
             onOpenOrders = {}
+            sortOrder = CatalogSortOrder.NAME,
+            isLoaded = true,
+            onSortOrderChange = {}
         )
     }
 }
