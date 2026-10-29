@@ -66,17 +66,16 @@ fun StoreNavigation(modifier: Modifier = Modifier) {
     // del catalogo puede recomponerse desde cero al regresar, pero este composable no.
     val gridState = rememberLazyGridState()
 
-    // Consulta con la que se pinto la cuadricula por ultima vez. Se guarda para distinguir
-    // un cambio real de busqueda de una composicion nueva con la misma consulta, que es lo
-    // que ocurre al rotar: sin esta comparacion la rotacion mandaria la cuadricula al
-    // inicio y se perderia la posicion.
-    var lastQuery by rememberSaveable { mutableStateOf(uiState.query) }
+    // Clave de lo que la cuadricula muestra: busqueda y orden. Se guarda para distinguir un
+    // cambio real de una composicion nueva, que es lo que ocurre al rotar.
+    val catalogKey = "${uiState.query}|${uiState.sortOrder.storageValue}"
+    var lastCatalogKey by rememberSaveable { mutableStateOf(catalogKey) }
 
-    // Reinicia la posicion solo cuando la consulta cambia de verdad (nueva busqueda o
-    // "Limpiar busqueda"), no al regresar del detalle ni al rotar.
-    LaunchedEffect(uiState.query) {
-        if (uiState.query != lastQuery) {
-            lastQuery = uiState.query
+    // Reinicia la posicion solo cuando la busqueda o el orden cambian de verdad, no al
+    // regresar del detalle ni al rotar.
+    LaunchedEffect(catalogKey) {
+        if (catalogKey != lastCatalogKey) {
+            lastCatalogKey = catalogKey
             gridState.scrollToItem(0)
         }
     }
@@ -138,7 +137,10 @@ fun StoreNavigation(modifier: Modifier = Modifier) {
                         backStack.add(StoreNavKey.CoffeeDetail(coffeeId))
                     },
                     onToggleFavorite = storeViewModel::toggleFavorite,
-                    onOpenOrder = { backStack.add(StoreNavKey.Order) }
+                    onOpenOrder = { backStack.add(StoreNavKey.Order) },
+                    sortOrder = uiState.sortOrder,
+                    isLoaded = uiState.isLoaded,
+                    onSortOrderChange = storeViewModel::onCatalogSortOrderChange
                 )
             }
             entry<StoreNavKey.CoffeeDetail> { key ->

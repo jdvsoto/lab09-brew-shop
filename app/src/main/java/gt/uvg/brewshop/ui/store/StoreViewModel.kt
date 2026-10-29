@@ -1,120 +1,182 @@
 package gt.uvg.brewshop.ui.store
 
-import androidx.lifecycle.ViewModel
+import android.app.Application
+import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import gt.uvg.brewshop.data.FavoriteEntity
+import gt.uvg.brewshop.data.StoreDatabase
+import gt.uvg.brewshop.data.observeCatalogSortOrder
+import gt.uvg.brewshop.data.saveCatalogSortOrder
+import gt.uvg.brewshop.data.storePreferencesDataStore
+import gt.uvg.brewshop.data.toEntity
+import gt.uvg.brewshop.data.toOrderLine
 import gt.uvg.brewshop.domain.OrderResult
 import gt.uvg.brewshop.domain.buildCatalog
 import gt.uvg.brewshop.domain.createOrderReceipt
 import gt.uvg.brewshop.domain.filterProductsByName
 import gt.uvg.brewshop.domain.imageUrlFor
+import gt.uvg.brewshop.domain.sortProducts
 import gt.uvg.brewshop.model.BillingType
+import gt.uvg.brewshop.model.CatalogSortOrder
 import gt.uvg.brewshop.model.Coffee
+import gt.uvg.brewshop.model.OrderReceipt
 import gt.uvg.brewshop.model.PaymentMethod
 import gt.uvg.brewshop.model.Roaster
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import gt.uvg.brewshop.domain.addToOrder as applyAddToOrder
 import gt.uvg.brewshop.domain.decreaseOrderLine as applyDecreaseOrderLine
-import gt.uvg.brewshop.domain.removeOrderLine as applyRemoveOrderLine
+
+/** El estado temporal no duplica los favoritos ni las lineas que Room conserva. */
+private data class StoreMemoryState(
+    val query: String = "",
+    val message: String? = null,
+    val lastReceipt: OrderReceipt? = null
+)
 
 /**
- * Unica fuente de verdad de la tienda.
- *
- * Todas las pantallas pertenecen a la misma feature y comparten catalogo, consulta,
- * favoritos y pedido, por lo que existe un solo ViewModel obtenido en la raiz.
- *
- * Este ViewModel no abre pantallas ni modifica la pila de navegacion, y no contiene las
- * reglas del pedido: las delega a las funciones de [gt.uvg.brewshop.domain], que son
- * Kotlin puro y pueden ejecutarse sin interfaz.
+ * Unica fuente de verdad de la tienda. Room observa los favoritos y el pedido; DataStore
+ * observa la preferencia. Solo busqueda, mensajes, recibo y checkout viven en memoria.
+ * Las reglas del pedido siguen delegadas al dominio Kotlin puro.
  */
-class StoreViewModel : ViewModel() {
+class StoreViewModel(application: Application) : AndroidViewModel(application) {
 
-    // El catalogo se genera una sola vez por instancia del ViewModel. Como el ViewModel
-    // sobrevive a la rotacion, los productos, sus precios y sus IDs no cambian.
-    private val _uiState = MutableStateFlow(buildInitialState())
-    val uiState: StateFlow<StoreUiState> = _uiState.asStateFlow()
+    private val database = StoreDatabase.getInstance(application)
+    private val favoriteDao = database.favoriteDao()
+    private val orderLineDao = database.orderLineDao()
+    private val preferences = application.storePreferencesDataStore
+
+    // No se persiste el catalogo: la semilla fija reproduce los mismos productos e IDs.
+    private val catalog = buildCatalog(originalCoffees, initialRoasters)
+    private val memoryState = MutableStateFlow(StoreMemoryState())
+    private val writeMutex = Mutex()
+
+    val uiState: StateFlow<StoreUiState> = combine(
+        memoryState,
+        favoriteDao.observeFavoriteIds(),
+        orderLineDao.observeOrderLines(),
+        preferences.observeCatalogSortOrder()
+    ) { memory, favoriteIds, orderLines, sortOrder ->
+        StoreUiState(
+            products = catalog,
+            roasters = initialRoasters,
+            favoriteIds = favoriteIds.toSet(),
+            query = memory.query,
+            visibleProducts = sortProducts(filterProductsByName(catalog, memory.query), sortOrder),
+            orderLines = orderLines.map { it.toOrderLine() },
+            message = memory.message,
+            lastReceipt = memory.lastReceipt,
+            sortOrder = sortOrder,
+            isLoaded = true
+        )
+    }.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5_000),
+        initialValue = StoreUiState(
+            products = catalog,
+            roasters = initialRoasters,
+            visibleProducts = catalog,
+            isLoaded = false
+        )
+    )
 
     private val _checkoutUiState = MutableStateFlow(CheckoutUiState())
     val checkoutUiState: StateFlow<CheckoutUiState> = _checkoutUiState.asStateFlow()
 
-    // Declarado despues de _uiState, que debe existir antes de derivar de el.
-    val orderUnits: StateFlow<Int> = _uiState
+    // Mantiene uiState suscrito para que el estado consultado al confirmar se actualice.
+    val orderUnits: StateFlow<Int> = uiState
         .map { it.orderUnitCount }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, _uiState.value.orderUnitCount)
+        .stateIn(viewModelScope, SharingStarted.Eagerly, 0)
 
-    // Vive fuera del formulario, asi que reiniciarlo no lo toca. Sobrevive a la rotacion
-    // porque el ViewModel sobrevive, y solo aumenta al confirmar una compra valida.
+    // Vive fuera del formulario: reiniciarlo no altera la numeracion de la sesion.
     private var confirmedOrderCount = 0
 
-    /** Actualiza la consulta y recalcula una sola vez la lista visible. */
     fun onQueryChange(query: String) {
-        _uiState.update { current ->
-            current.copy(
-                query = query,
-                visibleProducts = filterProductsByName(current.products, query)
-            )
-        }
+        memoryState.update { it.copy(query = query) }
     }
 
-    /** Limpia la busqueda y recupera el catalogo completo en su orden original. */
     fun clearQuery() {
         onQueryChange("")
     }
 
-    /**
-     * Agrega unidades al pedido. Si la regla rechaza la operacion, el pedido se conserva
-     * exactamente igual y solo cambia el mensaje visible.
-     */
+    /** Se valida el estado mas reciente de Room antes de escribir una cantidad. */
     fun addToOrder(productId: String, quantity: Int = 1) {
-        _uiState.update { current ->
-            when (val result = applyAddToOrder(current.orderLines, current.products, productId, quantity)) {
-                is OrderResult.Success -> current.copy(
-                    orderLines = result.lines,
-                    message = result.message
-                )
+        viewModelScope.launch {
+            writeMutex.withLock {
+                val currentLines = orderLineDao.getOrderLines().map { it.toOrderLine() }
+                when (val result = applyAddToOrder(currentLines, catalog, productId, quantity)) {
+                    is OrderResult.Success -> {
+                        result.lines.firstOrNull { it.productId == productId }?.let { line ->
+                            orderLineDao.upsert(line.toEntity())
+                        }
+                        memoryState.update { it.copy(message = result.message) }
+                    }
 
-                is OrderResult.Rejected -> current.copy(message = result.reason)
+                    is OrderResult.Rejected -> {
+                        // La operacion rechazada no modifica ninguna fila del pedido.
+                        memoryState.update { it.copy(message = result.reason) }
+                    }
+                }
             }
         }
     }
 
-    /** Aumenta en una unidad desde el resumen del pedido, con la misma validacion. */
     fun increaseOrderLine(productId: String) {
         addToOrder(productId, quantity = 1)
     }
 
-    /** Disminuye en una unidad. Llegar a cero elimina la linea. */
+    /** Al bajar de una unidad a cero, la fila se elimina tambien del disco. */
     fun decreaseOrderLine(productId: String) {
-        _uiState.update { current ->
-            current.copy(orderLines = applyDecreaseOrderLine(current.orderLines, productId))
+        viewModelScope.launch {
+            writeMutex.withLock {
+                val currentLines = orderLineDao.getOrderLines().map { it.toOrderLine() }
+                val updatedLines = applyDecreaseOrderLine(currentLines, productId)
+                val updated = updatedLines.firstOrNull { it.productId == productId }
+                when {
+                    updated != null -> orderLineDao.upsert(updated.toEntity())
+                    currentLines.any { it.productId == productId } -> orderLineDao.delete(productId)
+                }
+            }
         }
     }
 
     fun removeOrderLine(productId: String) {
-        _uiState.update { current ->
-            current.copy(orderLines = applyRemoveOrderLine(current.orderLines, productId))
+        viewModelScope.launch {
+            writeMutex.withLock {
+                orderLineDao.delete(productId)
+            }
         }
     }
 
-    /** La UI llama a esto despues de mostrar un mensaje, para que no se repita. */
     fun consumeMessage() {
-        _uiState.update { current -> current.copy(message = null) }
+        memoryState.update { it.copy(message = null) }
     }
 
-    /** Favorito del laboratorio 09: produce un estado nuevo, sin mutar el actual. */
+    /** Consulta la tabla dentro del Mutex para evitar toques consecutivos inconsistentes. */
     fun toggleFavorite(productId: String) {
-        _uiState.update { current ->
-            val favorites = if (productId in current.favoriteIds) {
-                current.favoriteIds - productId
-            } else {
-                current.favoriteIds + productId
+        viewModelScope.launch {
+            writeMutex.withLock {
+                if (favoriteDao.isFavorite(productId)) {
+                    favoriteDao.delete(productId)
+                } else {
+                    favoriteDao.insert(FavoriteEntity(productId))
+                }
             }
-            current.copy(favoriteIds = favorites)
+        }
+    }
+
+    fun onCatalogSortOrderChange(order: CatalogSortOrder) {
+        viewModelScope.launch {
+            preferences.saveCatalogSortOrder(order)
         }
     }
 
@@ -139,10 +201,8 @@ class StoreViewModel : ViewModel() {
     }
 
     /**
-     * Limpieza en cascada. Al pasar a CF, NIT y razon social dejan de estar tocados; sus
-     * errores ya dan null porque en CF no se calculan, y el texto se conserva para no
-     * obligar a reescribirlo. Al pasar a NIT no hace falta nada mas: los errores fiscales
-     * se recalculan solos y bloquean el boton, pero siguen ocultos hasta una nueva edicion.
+     * Al pasar a CF se reinician los indicadores de interaccion del NIT y la razon social.
+     * Los errores se derivan del formulario y no hay errores almacenados que limpiar.
      */
     fun onBillingTypeChange(billingType: BillingType) {
         _checkoutUiState.update { current ->
@@ -159,13 +219,12 @@ class StoreViewModel : ViewModel() {
     }
 
     /**
-     * Confirma la compra y devuelve true si lo hizo. Vuelve a comprobar el formulario y las
-     * unidades aunque el boton ya lo haga, porque deshabilitar un boton no es validar. Si
-     * algo falla no cambia nada: ni el contador, ni el pedido, ni el formulario.
+     * El recibo se calcula con el total anterior al vaciado. Un formulario invalido o un
+     * pedido vacio no altera ni el recibo ni las tablas. Los favoritos quedan intactos.
      */
     fun confirmOrder(): Boolean {
         val form = _checkoutUiState.value
-        val store = _uiState.value
+        val store = uiState.value
         if (!form.isFormValid || store.orderUnitCount == 0) return false
 
         confirmedOrderCount += 1
@@ -181,19 +240,15 @@ class StoreViewModel : ViewModel() {
             totalCents = store.orderTotalCents
         )
 
-        _uiState.update { it.copy(orderLines = emptyList(), lastReceipt = receipt, message = null) }
+        memoryState.update { it.copy(lastReceipt = receipt, message = null) }
         _checkoutUiState.value = CheckoutUiState()
+        viewModelScope.launch {
+            writeMutex.withLock {
+                orderLineDao.deleteAll()
+            }
+        }
         return true
     }
-}
-
-private fun buildInitialState(): StoreUiState {
-    val products = buildCatalog(originalCoffees, initialRoasters)
-    return StoreUiState(
-        products = products,
-        roasters = initialRoasters,
-        visibleProducts = products
-    )
 }
 
 private val initialRoasters = listOf(
