@@ -1,5 +1,7 @@
 package gt.uvg.brewshop.ui.store
 
+import android.util.Log
+import androidx.lifecycle.ViewModel
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -22,6 +24,9 @@ import gt.uvg.brewshop.model.Coffee
 import gt.uvg.brewshop.model.OrderReceipt
 import gt.uvg.brewshop.model.PaymentMethod
 import gt.uvg.brewshop.model.Roaster
+import gt.uvg.brewshop.network.StoreApi
+import gt.uvg.brewshop.network.buildNewOrderDto
+import java.io.IOException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -31,6 +36,8 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.serialization.SerializationException
+import retrofit2.HttpException
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import gt.uvg.brewshop.domain.addToOrder as applyAddToOrder
@@ -42,6 +49,8 @@ private data class StoreMemoryState(
     val message: String? = null,
     val lastReceipt: OrderReceipt? = null
 )
+
+private const val TAG = "StoreViewModel"
 
 /**
  * Unica fuente de verdad de la tienda. Room observa los favoritos y el pedido; DataStore
@@ -100,6 +109,12 @@ class StoreViewModel(application: Application) : AndroidViewModel(application) {
     // Vive fuera del formulario: reiniciarlo no altera la numeracion de la sesion.
     private var confirmedOrderCount = 0
 
+    private val orderApi = StoreApi.orderApi
+
+    private val _submissionState = MutableStateFlow<OrderSubmissionState>(OrderSubmissionState.Idle)
+    val submissionState: StateFlow<OrderSubmissionState> = _submissionState.asStateFlow()
+
+    /** Actualiza la consulta y recalcula una sola vez la lista visible. */
     fun onQueryChange(query: String) {
         memoryState.update { it.copy(query = query) }
     }
@@ -219,14 +234,55 @@ class StoreViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
+     * Inicia el envio del pedido al servidor y devuelve true si lo acepto. Vuelve a comprobar
+     * el formulario y las unidades aunque el boton ya lo haga, porque deshabilitar un boton no
+     * es validar. Reintentar es volver a llamarla: el pedido y el formulario siguen intactos.
      * El recibo se calcula con el total anterior al vaciado. Un formulario invalido o un
      * pedido vacio no altera ni el recibo ni las tablas. Los favoritos quedan intactos.
      */
     fun confirmOrder(): Boolean {
+        // Evita el doble envio: mientras se espera al servidor, otro toque no hace nada.
+        if (_submissionState.value is OrderSubmissionState.Sending) return false
+
         val form = _checkoutUiState.value
         val store = uiState.value
         if (!form.isFormValid || store.orderUnitCount == 0) return false
 
+        val request = buildNewOrderDto(
+            items = store.orderItems,
+            billingType = form.billingType,
+            paymentMethod = form.paymentMethod,
+            createdAt = System.currentTimeMillis()
+        )
+        _submissionState.value = OrderSubmissionState.Sending
+
+        viewModelScope.launch {
+            _submissionState.value = try {
+                val created = orderApi.createOrder(request)
+                // El pedido se vacia solo despues de que el servidor confirma que lo guardo.
+                completeConfirmedOrder(form, store)
+                OrderSubmissionState.Sent(created.id)
+            } catch (e: IOException) {
+                Log.w(TAG, "No hubo respuesta al enviar el pedido", e)
+                OrderSubmissionState.Failed("No pudimos enviar tu pedido. Revisa tu conexión.")
+            } catch (e: HttpException) {
+                Log.w(TAG, "El servidor respondio ${e.code()} al enviar el pedido", e)
+                OrderSubmissionState.Failed(
+                    "El servidor no pudo recibir tu pedido. Intenta de nuevo en un momento."
+                )
+            } catch (e: SerializationException) {
+                Log.w(TAG, "Respuesta inesperada al enviar el pedido", e)
+                OrderSubmissionState.Failed("Recibimos una respuesta inesperada del servidor.")
+            }
+        }
+        return true
+    }
+
+    /**
+     * Cierra la compra una vez que el servidor la guardo. Usa el formulario y el pedido
+     * capturados antes de enviar, que son los datos que el servidor recibio.
+     */
+    private fun completeConfirmedOrder(form: CheckoutUiState, store: StoreUiState) {
         confirmedOrderCount += 1
         val receipt = createOrderReceipt(
             orderNumber = confirmedOrderCount,

@@ -16,6 +16,7 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -23,6 +24,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -78,6 +80,7 @@ fun CatalogScreen(
     onOpenCoffee: (String) -> Unit,
     onToggleFavorite: (String) -> Unit,
     onOpenOrder: () -> Unit,
+    onOpenOrders: () -> Unit,
     sortOrder: CatalogSortOrder,
     isLoaded: Boolean,
     onSortOrderChange: (CatalogSortOrder) -> Unit,
@@ -92,6 +95,9 @@ fun CatalogScreen(
         title = "Mi tienda",
         modifier = modifier,
         actions = {
+            IconButton(onClick = onOpenOrders) {
+                Icon(imageVector = Icons.Filled.History, contentDescription = "Mis pedidos")
+            }
             OrderAccessAction(unitCount = orderUnitCount, onClick = onOpenOrder)
         },
         floatingActionButton = {
@@ -237,6 +243,7 @@ private fun CatalogScreenPreview() {
             onOpenCoffee = {},
             onToggleFavorite = {},
             onOpenOrder = {},
+            onOpenOrders = {}
             sortOrder = CatalogSortOrder.NAME,
             isLoaded = true,
             onSortOrderChange = {}
