@@ -25,12 +25,14 @@ import androidx.navigation3.ui.NavDisplay
 import gt.uvg.brewshop.ui.screens.catalog.CatalogScreen
 import gt.uvg.brewshop.ui.screens.checkout.CheckoutScreen
 import gt.uvg.brewshop.ui.screens.confirmation.OrderConfirmationScreen
+import gt.uvg.brewshop.ui.screens.detail.CONCURRENCY_TEST_ATTEMPTS
 import gt.uvg.brewshop.ui.screens.detail.CoffeeDetailScreen
 import gt.uvg.brewshop.ui.orders.OrdersViewModel
 import gt.uvg.brewshop.ui.screens.order.OrderScreen
 import gt.uvg.brewshop.ui.screens.orders.OrderDetailScreen
 import gt.uvg.brewshop.ui.screens.orders.OrdersScreen
 import gt.uvg.brewshop.ui.screens.roaster.RoasterProfileScreen
+import gt.uvg.brewshop.ui.store.CatalogStatus
 import gt.uvg.brewshop.ui.store.OrderSubmissionState
 import gt.uvg.brewshop.ui.store.StoreViewModel
 import kotlinx.serialization.Serializable
@@ -68,10 +70,11 @@ sealed interface StoreNavKey : NavKey {
 @Composable
 fun StoreNavigation(modifier: Modifier = Modifier) {
     val backStack = rememberNavBackStack(StoreNavKey.Catalog)
-    val storeViewModel: StoreViewModel = viewModel()
+    // Los ViewModels reciben sus Repository por constructor, a traves de su Factory.
+    val storeViewModel: StoreViewModel = viewModel(factory = StoreViewModel.Factory)
     val uiState by storeViewModel.uiState.collectAsStateWithLifecycle()
     // "Mis pedidos" es otra feature, con su propio ViewModel obtenido tambien en la raiz.
-    val ordersViewModel: OrdersViewModel = viewModel()
+    val ordersViewModel: OrdersViewModel = viewModel(factory = OrdersViewModel.Factory)
 
     // Cada carga remota responde al evento que abre su pantalla, no a su composicion: asi
     // rotar no repite la solicitud y un pedido recien enviado aparece al abrir la lista.
@@ -162,10 +165,13 @@ fun StoreNavigation(modifier: Modifier = Modifier) {
                     },
                     onToggleFavorite = storeViewModel::toggleFavorite,
                     onOpenOrder = { backStack.add(StoreNavKey.Order) },
-                    onOpenOrders = openOrders
+                    onOpenOrders = openOrders,
                     sortOrder = uiState.sortOrder,
-                    isLoaded = uiState.isLoaded,
-                    onSortOrderChange = storeViewModel::onCatalogSortOrderChange
+                    catalogStatus = uiState.catalogStatus,
+                    onSortOrderChange = storeViewModel::onCatalogSortOrderChange,
+                    onRetryCatalog = storeViewModel::retryCatalog,
+                    isSeeding = uiState.isSeeding,
+                    onSeedCatalog = storeViewModel::seedCatalog
                 )
             }
             entry<StoreNavKey.CoffeeDetail> { key ->
@@ -175,12 +181,14 @@ fun StoreNavigation(modifier: Modifier = Modifier) {
                 val roaster = coffee?.let { uiState.roasterById(it.roasterId) }
 
                 if (coffee != null && roaster != null) {
+                    val concurrencyTest = uiState.concurrencyTestFor(coffee.id)
                     CoffeeDetailScreen(
                         coffee = coffee,
                         roasterName = roaster.name,
                         isFavorite = uiState.isFavorite(coffee.id),
                         quantityInOrder = uiState.orderQuantityOf(coffee.id),
                         canAddToOrder = uiState.canAddToOrder(coffee.id),
+                        isReserving = uiState.isReserving(coffee.id),
                         orderUnitCount = uiState.orderUnitCount,
                         message = uiState.message,
                         onToggleFavorite = { storeViewModel.toggleFavorite(coffee.id) },
@@ -190,8 +198,15 @@ fun StoreNavigation(modifier: Modifier = Modifier) {
                             backStack.add(StoreNavKey.RoasterProfile(roaster.id))
                         },
                         onOpenOrder = { backStack.add(StoreNavKey.Order) },
-                        onBack = { backStack.removeLastOrNull() }
+                        onBack = { backStack.removeLastOrNull() },
+                        concurrencyTestResult = concurrencyTest?.result,
+                        isConcurrencyTestRunning = concurrencyTest != null && concurrencyTest.result == null,
+                        onConcurrencyTest = {
+                            storeViewModel.onConcurrencyTest(coffee.id, CONCURRENCY_TEST_ATTEMPTS)
+                        }
                     )
+                } else if (uiState.catalogStatus is CatalogStatus.Loading) {
+                    Text("Cargando…")
                 } else {
                     Text("Café no encontrado")
                 }
@@ -213,7 +228,8 @@ fun StoreNavigation(modifier: Modifier = Modifier) {
                     },
                     onBack = { backStack.removeLastOrNull() },
                     canCheckout = uiState.canCheckout,
-                    onContinueToCheckout = { backStack.add(StoreNavKey.Checkout) }
+                    onContinueToCheckout = { backStack.add(StoreNavKey.Checkout) },
+                    reservingProductIds = uiState.reservingProductIds
                 )
             }
             entry<StoreNavKey.Checkout> {

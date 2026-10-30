@@ -148,3 +148,68 @@ private fun pickNotes(random: Random): String {
 
 private fun formatAltitude(meters: Int): String =
     "${meters / 1000},${(meters % 1000).toString().padStart(3, '0')} msnm"
+
+/**
+ * Productos originales del laboratorio 09. Conservan sus IDs y su relacion con el
+ * tostador; solo se les agregaron existencias e imagen. Las existencias estan elegidas
+ * para que el catalogo empiece con un caso agotado, uno de exactamente 3 unidades y dos
+ * con mas, que son los casos que pide comprobar el pedido.
+ */
+val originalCoffees = listOf(
+    Coffee(
+        id = "c1",
+        name = "Bourbon Antigua",
+        description = "Clasico de valle volcanico: cuerpo redondo y dulzor de panela.",
+        priceCents = 7200,
+        stock = 12,
+        imageUrl = imageUrlFor("c1"),
+        roasterId = "r1",
+        origin = "Finca El Pilar, Antigua",
+        altitude = "1,550 msnm",
+        process = "Lavado",
+        roastLevel = "Tueste medio",
+        tastingNotes = "Panela, cacao y naranja madura"
+    ),
+    Coffee(
+        id = "c2",
+        name = "Geisha Huehuetenango",
+        description = "Taza floral y delicada, la mas aromatica del catalogo.",
+        priceCents = 14500,
+        stock = 3,
+        imageUrl = imageUrlFor("c2"),
+        roasterId = "r2",
+        origin = "La Libertad, Huehuetenango",
+        altitude = "1,900 msnm",
+        process = "Lavado",
+        roastLevel = "Tueste claro",
+        tastingNotes = "Jazmin, durazno y bergamota"
+    ),
+    Coffee(
+        id = "c3",
+        name = "Caturra Atitlan",
+        description = "Equilibrado y cremoso, pensado para prensa francesa.",
+        priceCents = 6800,
+        stock = 0,
+        imageUrl = imageUrlFor("c3"),
+        roasterId = "r1",
+        origin = "San Juan La Laguna, Solola",
+        altitude = "1,650 msnm",
+        process = "Honey",
+        roastLevel = "Tueste medio",
+        tastingNotes = "Almendra, miel y manzana roja"
+    ),
+    Coffee(
+        id = "c4",
+        name = "Pacamara Coban",
+        description = "Grano grande de proceso natural, dulce y afrutado.",
+        priceCents = 9800,
+        stock = 7,
+        imageUrl = imageUrlFor("c4"),
+        roasterId = "r2",
+        origin = "Coban, Alta Verapaz",
+        altitude = "1,400 msnm",
+        process = "Natural",
+        roastLevel = "Tueste claro",
+        tastingNotes = "Fresa, cacao con leche y vainilla"
+    )
+)
