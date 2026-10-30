@@ -40,9 +40,7 @@ data class StoreUiState(
     val catalogStatus: CatalogStatus = CatalogStatus.Loading,
     // Productos con una reserva o una devolucion esperando respuesta del servidor.
     val reservingProductIds: Set<String> = emptySet(),
-    val concurrencyTest: ConcurrencyTest? = null,
-    // TEMPORAL: solo mientras exista la carga inicial del catalogo.
-    val isSeeding: Boolean = false
+    val concurrencyTest: ConcurrencyTest? = null
 ) {
     /** Cuantos productos tiene el catalogo completo, para el contador "N de M". */
     val catalogSize: Int get() = products.size

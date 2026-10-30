@@ -4,7 +4,6 @@ import android.content.Context
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
 import gt.uvg.brewshop.data.CatalogPreferencesRepository
-import gt.uvg.brewshop.data.CatalogSeeder
 import gt.uvg.brewshop.data.CurrentOrderRepository
 import gt.uvg.brewshop.data.DataStoreCatalogPreferencesRepository
 import gt.uvg.brewshop.data.FavoriteRepository
@@ -42,7 +41,4 @@ class AppContainer(context: Context) {
         DataStoreCatalogPreferencesRepository(context.storePreferencesDataStore)
 
     val placedOrderRepository: PlacedOrderRepository = MockApiPlacedOrderRepository(StoreApi.orderApi)
-
-    // TEMPORAL: solo para la carga inicial del catalogo.
-    val catalogSeeder = CatalogSeeder(firestore)
 }

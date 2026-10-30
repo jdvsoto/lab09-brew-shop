@@ -169,9 +169,7 @@ fun StoreNavigation(modifier: Modifier = Modifier) {
                     sortOrder = uiState.sortOrder,
                     catalogStatus = uiState.catalogStatus,
                     onSortOrderChange = storeViewModel::onCatalogSortOrderChange,
-                    onRetryCatalog = storeViewModel::retryCatalog,
-                    isSeeding = uiState.isSeeding,
-                    onSeedCatalog = storeViewModel::seedCatalog
+                    onRetryCatalog = storeViewModel::retryCatalog
                 )
             }
             entry<StoreNavKey.CoffeeDetail> { key ->

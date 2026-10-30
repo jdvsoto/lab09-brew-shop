@@ -7,7 +7,6 @@ import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import gt.uvg.brewshop.BrewShopApplication
 import gt.uvg.brewshop.data.CatalogPreferencesRepository
-import gt.uvg.brewshop.data.CatalogSeeder
 import gt.uvg.brewshop.data.CurrentOrderRepository
 import gt.uvg.brewshop.data.FavoriteRepository
 import gt.uvg.brewshop.data.PlacedOrderRepository
@@ -53,8 +52,7 @@ private data class StoreMemoryState(
     val message: String? = null,
     val lastReceipt: OrderReceipt? = null,
     val reservingProductIds: Set<String> = emptySet(),
-    val concurrencyTest: ConcurrencyTest? = null,
-    val isSeeding: Boolean = false
+    val concurrencyTest: ConcurrencyTest? = null
 )
 
 /** Lo que entrega la lectura del catalogo: su estado y los productos, si ya llegaron. */
@@ -74,8 +72,7 @@ class StoreViewModel(
     private val favoriteRepository: FavoriteRepository,
     private val currentOrderRepository: CurrentOrderRepository,
     private val catalogPreferencesRepository: CatalogPreferencesRepository,
-    private val placedOrderRepository: PlacedOrderRepository,
-    private val catalogSeeder: CatalogSeeder
+    private val placedOrderRepository: PlacedOrderRepository
 ) : ViewModel() {
 
     private val _memoryState = MutableStateFlow(StoreMemoryState())
@@ -109,8 +106,7 @@ class StoreViewModel(
             sortOrder = sortOrder,
             catalogStatus = catalog.status,
             reservingProductIds = memory.reservingProductIds,
-            concurrencyTest = memory.concurrencyTest,
-            isSeeding = memory.isSeeding
+            concurrencyTest = memory.concurrencyTest
         )
     }.stateIn(
         scope = viewModelScope,
@@ -279,25 +275,6 @@ class StoreViewModel(
         }
     }
 
-    // TEMPORAL: carga unica de los 500 productos en Firestore.
-    fun seedCatalog() {
-        if (_memoryState.value.isSeeding) return
-        _memoryState.update { it.copy(isSeeding = true) }
-        viewModelScope.launch {
-            val message = sessionRepository.signInAnonymously()
-                .fold(
-                    onSuccess = {
-                        catalogSeeder.seed().fold(
-                            onSuccess = { count -> "Se cargaron $count productos en Firestore." },
-                            onFailure = { "No se pudo cargar el catálogo." }
-                        )
-                    },
-                    onFailure = { "No se pudo iniciar la sesión." }
-                )
-            _memoryState.update { it.copy(isSeeding = false, message = message) }
-        }
-    }
-
     fun consumeMessage() {
         _memoryState.update { it.copy(message = null) }
     }
@@ -440,8 +417,7 @@ class StoreViewModel(
                     favoriteRepository = container.favoriteRepository,
                     currentOrderRepository = container.currentOrderRepository,
                     catalogPreferencesRepository = container.catalogPreferencesRepository,
-                    placedOrderRepository = container.placedOrderRepository,
-                    catalogSeeder = container.catalogSeeder
+                    placedOrderRepository = container.placedOrderRepository
                 )
             }
         }

@@ -27,7 +27,6 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
@@ -87,8 +86,6 @@ fun CatalogScreen(
     catalogStatus: CatalogStatus,
     onSortOrderChange: (CatalogSortOrder) -> Unit,
     onRetryCatalog: () -> Unit,
-    isSeeding: Boolean,
-    onSeedCatalog: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val coroutineScope = rememberCoroutineScope()
@@ -100,10 +97,6 @@ fun CatalogScreen(
         title = "Mi tienda",
         modifier = modifier,
         actions = {
-            // TEMPORAL: carga unica del catalogo en Firestore.
-            TextButton(onClick = onSeedCatalog, enabled = !isSeeding) {
-                Text(if (isSeeding) "Cargando…" else "Cargar catálogo")
-            }
             IconButton(onClick = onOpenOrders) {
                 Icon(imageVector = Icons.Filled.History, contentDescription = "Mis pedidos")
             }
@@ -273,9 +266,7 @@ private fun CatalogScreenPreview() {
             sortOrder = CatalogSortOrder.NAME,
             catalogStatus = CatalogStatus.Ready,
             onSortOrderChange = {},
-            onRetryCatalog = {},
-            isSeeding = false,
-            onSeedCatalog = {}
+            onRetryCatalog = {}
         )
     }
 }

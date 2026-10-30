@@ -1,0 +1,17 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /products/{productId} {
+      // Solo usuarios con sesion leen el catalogo.
+      allow read: if request.auth != null;
+
+      // Con sesion, una actualizacion solo puede cambiar las existencias, y el resultado
+      // debe ser un entero mayor o igual que cero. No hay reglas de create ni delete:
+      // nadie puede crear ni eliminar productos desde la aplicacion.
+      allow update: if request.auth != null
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['stock'])
+        && request.resource.data.stock is int
+        && request.resource.data.stock >= 0;
+    }
+  }
+}
