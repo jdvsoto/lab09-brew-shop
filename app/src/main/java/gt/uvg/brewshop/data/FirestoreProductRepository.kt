@@ -2,6 +2,7 @@ package gt.uvg.brewshop.data
 
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.FirebaseFirestoreException
+import com.google.firebase.firestore.Source
 import com.google.firebase.firestore.TransactionOptions
 import gt.uvg.brewshop.model.Coffee
 import gt.uvg.brewshop.model.DataErrorReason
@@ -10,6 +11,7 @@ import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.tasks.await
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * Cuando muchas reservas del mismo producto coinciden, solo una gana cada ronda y las demas
@@ -17,6 +19,9 @@ import kotlinx.coroutines.tasks.await
  * reintentos aunque todavia quedaran existencias.
  */
 private const val MAX_TRANSACTION_ATTEMPTS = 30
+
+/** Tiempo maximo para confirmar que hay conexion con el servidor antes de reservar. */
+private const val SERVER_CHECK_TIMEOUT_MILLIS = 5_000L
 
 /** Resultado de una transaccion de existencias. */
 private enum class StockChange { APPLIED, OUT_OF_STOCK, MISSING_PRODUCT }
@@ -57,12 +62,17 @@ class FirestoreProductRepository(private val firestore: FirebaseFirestore) : Pro
      * Cambia las existencias dentro de una transaccion: lee el valor guardado en el servidor y
      * escribe el nuevo solo si nadie lo modifico entre la lectura y la escritura. Si otra app
      * lo cambio, Firestore descarta el intento y repite la funcion con el valor actualizado,
-     * asi que dos reservas nunca descuentan la misma unidad. Las transacciones necesitan
-     * conexion: sin red fallan de inmediato en lugar de quedar en cola.
+     * asi que dos reservas nunca descuentan la misma unidad.
+     *
+     * Sin red, una transaccion no falla: reintenta hasta agotar sus intentos y la pantalla se
+     * quedaria en "Reservando". Por eso antes se consulta el producto directamente al
+     * servidor; esa lectura falla enseguida sin conexion y la reserva no llega a empezar.
      */
     private suspend fun changeStock(productId: String, delta: Int): Result<Unit> {
         val document = products.document(productId)
         return try {
+            withTimeoutOrNull(SERVER_CHECK_TIMEOUT_MILLIS) { document.get(Source.SERVER).await() }
+                ?: return Result.failure(DataException(DataErrorReason.NO_CONNECTION))
             val change = firestore.runTransaction(transactionOptions) { transaction ->
                 val stock = transaction.get(document).getLong(ProductFields.STOCK)
                 when {
