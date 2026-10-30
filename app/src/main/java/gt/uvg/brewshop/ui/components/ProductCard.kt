@@ -1,6 +1,5 @@
 package gt.uvg.brewshop.ui.components
 
-import android.util.Log
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -17,7 +16,6 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
@@ -26,14 +24,6 @@ import androidx.compose.ui.unit.dp
 import gt.uvg.brewshop.domain.formatPriceCents
 import gt.uvg.brewshop.model.Coffee
 import gt.uvg.brewshop.ui.theme.BrewShopTheme
-
-/**
- * Sonda de composicion del paso 2. Se deja en true mientras se toman las mediciones con
- * Logcat y se pone en false antes de la entrega final, que es lo que pide el laboratorio.
- */
-private const val COMPOSITION_PROBE_ENABLED = false
-
-private const val PROBE_TAG = "CatalogProbe"
 
 /**
  * Tarjeta de producto del catalogo.
@@ -51,18 +41,6 @@ fun ProductCard(
     onToggleFavorite: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    if (COMPOSITION_PROBE_ENABLED) {
-        // Registra la entrada a composicion y su salida. La clave es el id: recomponer la
-        // tarjeta con el mismo producto no reinicia el efecto, asi que estos logs cuentan
-        // entradas y salidas de composicion y no recomposiciones.
-        DisposableEffect(product.id) {
-            Log.d(PROBE_TAG, "ENTER id=${product.id}")
-            onDispose {
-                Log.d(PROBE_TAG, "EXIT id=${product.id}")
-            }
-        }
-    }
-
     Card(
         modifier = modifier
             .fillMaxWidth()

@@ -16,7 +16,8 @@ import gt.uvg.brewshop.model.Roaster
 /**
  * Estado inmutable que comparten las pantallas de la tienda.
  *
- * [products] es el catalogo completo y la unica fuente de los datos de producto.
+ * [products] es el catalogo completo leido de Firestore y la unica fuente de los datos de
+ * producto; esta vacio mientras [catalogStatus] no es Ready.
  * [visibleProducts] no es una segunda fuente de verdad, sino el resultado ya calculado de
  * aplicar [query] sobre [products]: se guarda para no volver a filtrar 500 elementos en
  * cada recomposicion de la cuadricula.
@@ -36,8 +37,10 @@ data class StoreUiState(
     // Vive aqui y no en el formulario: reiniciar el checkout no debe borrar el recibo.
     val lastReceipt: OrderReceipt? = null,
     val sortOrder: CatalogSortOrder = CatalogSortOrder.NAME,
-    // False mientras los datos guardados en disco todavia no llegan, al abrir la app.
-    val isLoaded: Boolean = true
+    val catalogStatus: CatalogStatus = CatalogStatus.Loading,
+    // Productos con una reserva o una devolucion esperando respuesta del servidor.
+    val reservingProductIds: Set<String> = emptySet(),
+    val concurrencyTest: ConcurrencyTest? = null
 ) {
     /** Cuantos productos tiene el catalogo completo, para el contador "N de M". */
     val catalogSize: Int get() = products.size
@@ -67,7 +70,14 @@ data class StoreUiState(
      * repetirla, para que la pantalla lea la respuesta en vez de calcularla.
      */
     fun canAddToOrder(productId: String): Boolean =
-        addToOrder(orderLines, products, productId) is OrderResult.Success
+        !isReserving(productId) && addToOrder(orderLines, products, productId) is OrderResult.Success
+
+    /** True mientras el servidor no confirma la reserva o la devolucion de este producto. */
+    fun isReserving(productId: String): Boolean = productId in reservingProductIds
+
+    /** Resultado de la prueba de concurrencia, solo si es de este producto. */
+    fun concurrencyTestFor(productId: String): ConcurrencyTest? =
+        concurrencyTest?.takeIf { it.productId == productId }
 
     fun isFavorite(productId: String): Boolean = productId in favoriteIds
 

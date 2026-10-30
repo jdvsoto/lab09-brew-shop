@@ -2,13 +2,17 @@ package gt.uvg.brewshop.ui.screens.detail
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.SnackbarDuration
@@ -33,6 +37,9 @@ import gt.uvg.brewshop.ui.components.ProductImage
 import gt.uvg.brewshop.ui.components.StoreScaffold
 import gt.uvg.brewshop.ui.theme.BrewShopTheme
 
+/** Reservas simultaneas que lanza la prueba de concurrencia. */
+const val CONCURRENCY_TEST_ATTEMPTS = 20
+
 /**
  * Detalle de un producto.
  *
@@ -43,7 +50,11 @@ import gt.uvg.brewshop.ui.theme.BrewShopTheme
  * resuelto desde el estado: la pantalla no decide si agregar se permite.
  *
  * Agregar al pedido no navega: la confirmacion o el rechazo aparecen aqui mismo como
- * Snackbar y el resumen del pedido solo se abre si la persona lo pide.
+ * Snackbar y el resumen del pedido solo se abre si la persona lo pide. Mientras el servidor
+ * confirma la reserva, [isReserving] cambia el boton por un indicador.
+ *
+ * [concurrencyTestResult] y [isConcurrencyTestRunning] son de la herramienta de prueba de
+ * concurrencia, que se conserva en la entrega.
  */
 @Composable
 fun CoffeeDetailScreen(
@@ -52,6 +63,7 @@ fun CoffeeDetailScreen(
     isFavorite: Boolean,
     quantityInOrder: Int,
     canAddToOrder: Boolean,
+    isReserving: Boolean,
     orderUnitCount: Int,
     message: String?,
     onToggleFavorite: () -> Unit,
@@ -60,6 +72,9 @@ fun CoffeeDetailScreen(
     onOpenRoaster: () -> Unit,
     onOpenOrder: () -> Unit,
     onBack: () -> Unit,
+    concurrencyTestResult: String?,
+    isConcurrencyTestRunning: Boolean,
+    onConcurrencyTest: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     var expanded by remember { mutableStateOf(false) }
@@ -121,15 +136,23 @@ fun CoffeeDetailScreen(
                 enabled = canAddToOrder,
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Text("Agregar al pedido")
+                when {
+                    isReserving -> {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(18.dp),
+                            strokeWidth = 2.dp
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Reservando…")
+                    }
+
+                    coffee.stock == 0 -> Text("Agotado")
+                    else -> Text("Agregar al pedido")
+                }
             }
-            if (!canAddToOrder) {
+            if (coffee.stock == 0 && !isReserving) {
                 Text(
-                    text = if (coffee.stock == 0) {
-                        "Producto agotado."
-                    } else {
-                        "Ya tienes las ${coffee.stock} unidades disponibles en el pedido."
-                    },
+                    text = "Agotado: no quedan existencias de este producto.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.error
                 )
@@ -147,6 +170,27 @@ fun CoffeeDetailScreen(
                         Text("Ver perfil del tostador")
                     }
                 }
+            }
+
+            // Herramienta de prueba: reserva varias unidades a la vez sin tocar el pedido.
+            OutlinedButton(
+                onClick = onConcurrencyTest,
+                enabled = !isConcurrencyTestRunning,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(
+                    if (isConcurrencyTestRunning) {
+                        "Probando concurrencia…"
+                    } else {
+                        "Prueba de concurrencia · $CONCURRENCY_TEST_ATTEMPTS intentos"
+                    }
+                )
+            }
+            if (concurrencyTestResult != null) {
+                Text(
+                    text = concurrencyTestResult,
+                    style = MaterialTheme.typography.titleMedium
+                )
             }
 
             // Estado visual propio de esta pantalla: no pertenece al ViewModel.
@@ -199,6 +243,7 @@ private fun CoffeeDetailScreenPreview() {
             isFavorite = true,
             quantityInOrder = 2,
             canAddToOrder = true,
+            isReserving = false,
             orderUnitCount = 3,
             message = null,
             onToggleFavorite = {},
@@ -206,7 +251,10 @@ private fun CoffeeDetailScreenPreview() {
             onMessageShown = {},
             onOpenRoaster = {},
             onOpenOrder = {},
-            onBack = {}
+            onBack = {},
+            concurrencyTestResult = "Éxitos: 5 · Rechazos: 15",
+            isConcurrencyTestRunning = false,
+            onConcurrencyTest = {}
         )
     }
 }

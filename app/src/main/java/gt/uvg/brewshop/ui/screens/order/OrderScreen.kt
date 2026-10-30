@@ -50,8 +50,10 @@ private val CONTROL_SIZE = 48.dp
  * Cada producto ocupa una sola linea con su cantidad acumulada, nunca una entrada repetida:
  * de eso se encarga `addToOrder` en el dominio y aqui solo se pinta el resultado.
  *
- * Los controles no validan nada. Subir una unidad por encima de las existencias se rechaza
- * en el ViewModel, que devuelve el motivo en [message] y deja el pedido intacto.
+ * Los controles no validan nada. Subir una unidad sin existencias se rechaza en el
+ * ViewModel, que devuelve el motivo en [message] y deja el pedido intacto. Cada cambio
+ * reserva o devuelve unidades en el servidor: mientras espera la respuesta, la linea de
+ * [reservingProductIds] lo indica y no acepta otro toque.
  */
 @Composable
 fun OrderScreen(
@@ -66,6 +68,7 @@ fun OrderScreen(
     onBack: () -> Unit,
     canCheckout: Boolean,
     onContinueToCheckout: () -> Unit,
+    reservingProductIds: Set<String>,
     modifier: Modifier = Modifier
 ) {
     val snackbarHostState = remember { SnackbarHostState() }
@@ -105,6 +108,7 @@ fun OrderScreen(
                     items(items, key = { it.product.id }) { item ->
                         OrderItemRow(
                             item = item,
+                            isReserving = item.product.id in reservingProductIds,
                             onIncrease = onIncrease,
                             onDecrease = onDecrease,
                             onRemove = onRemove
@@ -188,6 +192,7 @@ private fun OrderTotal(
 @Composable
 private fun OrderItemRow(
     item: OrderItem,
+    isReserving: Boolean,
     onIncrease: (String) -> Unit,
     onDecrease: (String) -> Unit,
     onRemove: (String) -> Unit,
@@ -218,7 +223,11 @@ private fun OrderItemRow(
                 )
             }
             Text(
-                text = "${formatPriceCents(product.priceCents)} c/u · ${product.stock} disponibles",
+                text = if (isReserving) {
+                    "Actualizando la reserva…"
+                } else {
+                    "${formatPriceCents(product.priceCents)} c/u · ${product.stock} disponibles"
+                },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -229,6 +238,7 @@ private fun OrderItemRow(
             ) {
                 IconButton(
                     onClick = { onDecrease(product.id) },
+                    enabled = !isReserving,
                     modifier = Modifier.size(CONTROL_SIZE)
                 ) {
                     Icon(
@@ -243,6 +253,7 @@ private fun OrderItemRow(
                 )
                 IconButton(
                     onClick = { onIncrease(product.id) },
+                    enabled = !isReserving,
                     modifier = Modifier.size(CONTROL_SIZE)
                 ) {
                     Icon(
@@ -253,6 +264,7 @@ private fun OrderItemRow(
                 Spacer(modifier = Modifier.weight(1f))
                 IconButton(
                     onClick = { onRemove(product.id) },
+                    enabled = !isReserving,
                     modifier = Modifier.size(CONTROL_SIZE)
                 ) {
                     Icon(
@@ -301,6 +313,7 @@ private fun OrderScreenPreview() {
             onBackToCatalog = {},
             canCheckout = true,
             onContinueToCheckout = {},
+            reservingProductIds = setOf("c2"),
             onBack = {}
         )
     }
@@ -321,6 +334,7 @@ private fun OrderScreenEmptyPreview() {
             onBackToCatalog = {},
             canCheckout = false,
             onContinueToCheckout = {},
+            reservingProductIds = emptySet(),
             onBack = {}
         )
     }

@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "690567454070",
+    "project_id": "lab09brewshop",
+    "storage_bucket": "lab09brewshop.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:690567454070:android:043eac86bccda978036e57",
+        "android_client_info": {
+          "package_name": "gt.uvg.brewshop"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCnTZy8i3hGLFKDjD9lr4fht_wmFZFRfRs"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

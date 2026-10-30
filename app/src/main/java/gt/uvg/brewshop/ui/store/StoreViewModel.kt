@@ -1,101 +1,117 @@
 package gt.uvg.brewshop.ui.store
 
-import android.util.Log
 import androidx.lifecycle.ViewModel
-import android.app.Application
-import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
-import gt.uvg.brewshop.data.FavoriteEntity
-import gt.uvg.brewshop.data.StoreDatabase
-import gt.uvg.brewshop.data.observeCatalogSortOrder
-import gt.uvg.brewshop.data.saveCatalogSortOrder
-import gt.uvg.brewshop.data.storePreferencesDataStore
-import gt.uvg.brewshop.data.toEntity
-import gt.uvg.brewshop.data.toOrderLine
+import androidx.lifecycle.viewmodel.initializer
+import androidx.lifecycle.viewmodel.viewModelFactory
+import gt.uvg.brewshop.BrewShopApplication
+import gt.uvg.brewshop.data.CatalogPreferencesRepository
+import gt.uvg.brewshop.data.CurrentOrderRepository
+import gt.uvg.brewshop.data.FavoriteRepository
+import gt.uvg.brewshop.data.PlacedOrderRepository
+import gt.uvg.brewshop.data.ProductRepository
+import gt.uvg.brewshop.data.SessionRepository
 import gt.uvg.brewshop.domain.OrderResult
-import gt.uvg.brewshop.domain.buildCatalog
 import gt.uvg.brewshop.domain.createOrderReceipt
 import gt.uvg.brewshop.domain.filterProductsByName
-import gt.uvg.brewshop.domain.imageUrlFor
 import gt.uvg.brewshop.domain.sortProducts
+import gt.uvg.brewshop.domain.storeRoasters
 import gt.uvg.brewshop.model.BillingType
 import gt.uvg.brewshop.model.CatalogSortOrder
 import gt.uvg.brewshop.model.Coffee
+import gt.uvg.brewshop.model.DataErrorReason
 import gt.uvg.brewshop.model.OrderReceipt
 import gt.uvg.brewshop.model.PaymentMethod
-import gt.uvg.brewshop.model.Roaster
-import gt.uvg.brewshop.network.StoreApi
-import gt.uvg.brewshop.network.buildNewOrderDto
-import java.io.IOException
+import gt.uvg.brewshop.model.dataErrorReason
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.emitAll
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import kotlinx.serialization.SerializationException
-import retrofit2.HttpException
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import gt.uvg.brewshop.domain.addToOrder as applyAddToOrder
 import gt.uvg.brewshop.domain.decreaseOrderLine as applyDecreaseOrderLine
 
-/** El estado temporal no duplica los favoritos ni las lineas que Room conserva. */
+/** El estado temporal no duplica el catalogo, los favoritos ni las lineas de sus Repository. */
 private data class StoreMemoryState(
     val query: String = "",
     val message: String? = null,
-    val lastReceipt: OrderReceipt? = null
+    val lastReceipt: OrderReceipt? = null,
+    val reservingProductIds: Set<String> = emptySet(),
+    val concurrencyTest: ConcurrencyTest? = null
 )
 
-private const val TAG = "StoreViewModel"
+/** Lo que entrega la lectura del catalogo: su estado y los productos, si ya llegaron. */
+private data class CatalogLoad(
+    val status: CatalogStatus,
+    val products: List<Coffee> = emptyList()
+)
 
 /**
- * Unica fuente de verdad de la tienda. Room observa los favoritos y el pedido; DataStore
- * observa la preferencia. Solo busqueda, mensajes, recibo y checkout viven en memoria.
- * Las reglas del pedido siguen delegadas al dominio Kotlin puro.
+ * Unica fuente de verdad de la tienda. No sabe de donde vienen los datos: el catalogo, los
+ * favoritos, el pedido en curso, la preferencia y los pedidos confirmados llegan de sus
+ * Repository, que recibe por constructor. Las reglas del pedido siguen en el dominio.
  */
-class StoreViewModel(application: Application) : AndroidViewModel(application) {
+class StoreViewModel(
+    private val sessionRepository: SessionRepository,
+    private val productRepository: ProductRepository,
+    private val favoriteRepository: FavoriteRepository,
+    private val currentOrderRepository: CurrentOrderRepository,
+    private val catalogPreferencesRepository: CatalogPreferencesRepository,
+    private val placedOrderRepository: PlacedOrderRepository
+) : ViewModel() {
 
-    private val database = StoreDatabase.getInstance(application)
-    private val favoriteDao = database.favoriteDao()
-    private val orderLineDao = database.orderLineDao()
-    private val preferences = application.storePreferencesDataStore
+    private val _memoryState = MutableStateFlow(StoreMemoryState())
 
-    // No se persiste el catalogo: la semilla fija reproduce los mismos productos e IDs.
-    private val catalog = buildCatalog(originalCoffees, initialRoasters)
-    private val memoryState = MutableStateFlow(StoreMemoryState())
-    private val writeMutex = Mutex()
+    // Cada valor nuevo vuelve a abrir la lectura del catalogo: es el boton Reintentar.
+    private val catalogRequests = MutableStateFlow(0)
+
+    // Serializa los cambios del pedido: dos toques seguidos no leen la misma cantidad.
+    private val orderMutex = Mutex()
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private val catalogLoad: Flow<CatalogLoad> = catalogRequests.flatMapLatest { loadCatalog() }
 
     val uiState: StateFlow<StoreUiState> = combine(
-        memoryState,
-        favoriteDao.observeFavoriteIds(),
-        orderLineDao.observeOrderLines(),
-        preferences.observeCatalogSortOrder()
-    ) { memory, favoriteIds, orderLines, sortOrder ->
+        _memoryState,
+        catalogLoad,
+        favoriteRepository.observeFavoriteIds(),
+        currentOrderRepository.observeOrderLines(),
+        catalogPreferencesRepository.observeSortOrder()
+    ) { memory, catalog, favoriteIds, orderLines, sortOrder ->
         StoreUiState(
-            products = catalog,
-            roasters = initialRoasters,
-            favoriteIds = favoriteIds.toSet(),
+            products = catalog.products,
+            roasters = storeRoasters,
+            favoriteIds = favoriteIds,
             query = memory.query,
-            visibleProducts = sortProducts(filterProductsByName(catalog, memory.query), sortOrder),
-            orderLines = orderLines.map { it.toOrderLine() },
+            // Buscar y ordenar se hacen en la app, sobre lo ya recibido: no se vuelve a leer.
+            visibleProducts = sortProducts(filterProductsByName(catalog.products, memory.query), sortOrder),
+            orderLines = orderLines,
             message = memory.message,
             lastReceipt = memory.lastReceipt,
             sortOrder = sortOrder,
-            isLoaded = true
+            catalogStatus = catalog.status,
+            reservingProductIds = memory.reservingProductIds,
+            concurrencyTest = memory.concurrencyTest
         )
     }.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5_000),
-        initialValue = StoreUiState(
-            products = catalog,
-            roasters = initialRoasters,
-            visibleProducts = catalog,
-            isLoaded = false
-        )
+        initialValue = StoreUiState(roasters = storeRoasters)
     )
 
     private val _checkoutUiState = MutableStateFlow(CheckoutUiState())
@@ -109,36 +125,66 @@ class StoreViewModel(application: Application) : AndroidViewModel(application) {
     // Vive fuera del formulario: reiniciarlo no altera la numeracion de la sesion.
     private var confirmedOrderCount = 0
 
-    private val orderApi = StoreApi.orderApi
-
     private val _submissionState = MutableStateFlow<OrderSubmissionState>(OrderSubmissionState.Idle)
     val submissionState: StateFlow<OrderSubmissionState> = _submissionState.asStateFlow()
 
+    /**
+     * Inicia la sesion anonima y despues escucha el catalogo. Un fallo deja el estado de error
+     * en lugar de cerrar la app o quedarse cargando.
+     */
+    private fun loadCatalog(): Flow<CatalogLoad> = flow {
+        emit(CatalogLoad(CatalogStatus.Loading))
+        val sessionError = sessionRepository.signInAnonymously().exceptionOrNull()
+        if (sessionError != null) {
+            emit(CatalogLoad(CatalogStatus.Error(catalogErrorMessage(sessionError.dataErrorReason))))
+            return@flow
+        }
+        emitAll(
+            productRepository.observeProducts()
+                .map { products -> CatalogLoad(CatalogStatus.Ready, products) }
+                .catch { error ->
+                    emit(CatalogLoad(CatalogStatus.Error(catalogErrorMessage(error.dataErrorReason))))
+                }
+        )
+    }
+
+    fun retryCatalog() {
+        catalogRequests.update { it + 1 }
+    }
+
     /** Actualiza la consulta y recalcula una sola vez la lista visible. */
     fun onQueryChange(query: String) {
-        memoryState.update { it.copy(query = query) }
+        _memoryState.update { it.copy(query = query) }
     }
 
     fun clearQuery() {
         onQueryChange("")
     }
 
-    /** Se valida el estado mas reciente de Room antes de escribir una cantidad. */
-    fun addToOrder(productId: String, quantity: Int = 1) {
-        viewModelScope.launch {
-            writeMutex.withLock {
-                val currentLines = orderLineDao.getOrderLines().map { it.toOrderLine() }
-                when (val result = applyAddToOrder(currentLines, catalog, productId, quantity)) {
-                    is OrderResult.Success -> {
-                        result.lines.firstOrNull { it.productId == productId }?.let { line ->
-                            orderLineDao.upsert(line.toEntity())
-                        }
-                        memoryState.update { it.copy(message = result.message) }
-                    }
+    /**
+     * Agrega una unidad reservandola primero en el servidor. Solo si la reserva se confirma se
+     * guarda la linea; si falla, el pedido en curso no cambia.
+     */
+    fun addToOrder(productId: String) {
+        changeReservation(productId) {
+            val lines = currentOrderRepository.getOrderLines()
+            when (val result = applyAddToOrder(lines, uiState.value.products, productId)) {
+                is OrderResult.Rejected -> showMessage(result.reason)
 
-                    is OrderResult.Rejected -> {
-                        // La operacion rechazada no modifica ninguna fila del pedido.
-                        memoryState.update { it.copy(message = result.reason) }
+                is OrderResult.Success -> {
+                    val reservation = productRepository.reserveUnit(productId)
+                    val reservationError = reservation.exceptionOrNull()
+                    if (reservationError != null) {
+                        showMessage(reservationErrorMessage(productId, reservationError.dataErrorReason))
+                    } else {
+                        val line = result.lines.first { it.productId == productId }
+                        if (currentOrderRepository.saveLine(line).isSuccess) {
+                            showMessage(result.message)
+                        } else {
+                            // La unidad ya se desconto: se devuelve para no dejarla reservada sin pedido.
+                            productRepository.releaseUnits(productId, 1)
+                            showMessage("No pudimos guardar tu pedido. Intenta de nuevo.")
+                        }
                     }
                 }
             }
@@ -146,52 +192,108 @@ class StoreViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun increaseOrderLine(productId: String) {
-        addToOrder(productId, quantity = 1)
+        addToOrder(productId)
     }
 
-    /** Al bajar de una unidad a cero, la fila se elimina tambien del disco. */
+    /** Devuelve una unidad al servidor y solo entonces baja la cantidad; en cero, quita la linea. */
     fun decreaseOrderLine(productId: String) {
-        viewModelScope.launch {
-            writeMutex.withLock {
-                val currentLines = orderLineDao.getOrderLines().map { it.toOrderLine() }
-                val updatedLines = applyDecreaseOrderLine(currentLines, productId)
-                val updated = updatedLines.firstOrNull { it.productId == productId }
-                when {
-                    updated != null -> orderLineDao.upsert(updated.toEntity())
-                    currentLines.any { it.productId == productId } -> orderLineDao.delete(productId)
+        changeReservation(productId) {
+            val lines = currentOrderRepository.getOrderLines()
+            if (lines.none { it.productId == productId }) return@changeReservation
+            if (releaseOrExplain(productId, quantity = 1)) {
+                val updated = applyDecreaseOrderLine(lines, productId).firstOrNull { it.productId == productId }
+                if (updated != null) {
+                    currentOrderRepository.saveLine(updated)
+                } else {
+                    currentOrderRepository.removeLine(productId)
                 }
             }
         }
     }
 
+    /** Devuelve todas las unidades de la linea al servidor y despues la elimina. */
     fun removeOrderLine(productId: String) {
+        changeReservation(productId) {
+            val line = currentOrderRepository.getOrderLines().firstOrNull { it.productId == productId }
+                ?: return@changeReservation
+            if (releaseOrExplain(productId, line.quantity)) {
+                currentOrderRepository.removeLine(productId)
+            }
+        }
+    }
+
+    /**
+     * Marca el producto como "reservando" mientras espera al servidor, para que la pantalla lo
+     * indique y no acepte otro toque sobre el mismo producto. Los toques llegan en el hilo
+     * principal, asi que revisar y marcar no compiten entre si.
+     */
+    private fun changeReservation(productId: String, block: suspend () -> Unit) {
+        if (productId in _memoryState.value.reservingProductIds) return
+        _memoryState.update { it.copy(reservingProductIds = it.reservingProductIds + productId) }
         viewModelScope.launch {
-            writeMutex.withLock {
-                orderLineDao.delete(productId)
+            try {
+                orderMutex.withLock { block() }
+            } finally {
+                _memoryState.update { it.copy(reservingProductIds = it.reservingProductIds - productId) }
+            }
+        }
+    }
+
+    private suspend fun releaseOrExplain(productId: String, quantity: Int): Boolean {
+        val error = productRepository.releaseUnits(productId, quantity).exceptionOrNull() ?: return true
+        showMessage(
+            if (error.dataErrorReason == DataErrorReason.NO_CONNECTION) {
+                "Sin conexión no podemos devolver las unidades. El pedido no cambió."
+            } else {
+                "No pudimos devolver las unidades. El pedido no cambió."
+            }
+        )
+        return false
+    }
+
+    /**
+     * Herramienta de prueba: lanza [attempts] reservas a la vez, sin tocar el pedido en curso,
+     * y cuenta cuantas acepto el servidor.
+     */
+    fun onConcurrencyTest(productId: String, attempts: Int) {
+        val isRunning = _memoryState.value.concurrencyTest?.let { it.result == null } ?: false
+        if (isRunning) return
+        _memoryState.update { it.copy(concurrencyTest = ConcurrencyTest(productId)) }
+        viewModelScope.launch {
+            val results = List(attempts) {
+                async { productRepository.reserveUnit(productId) }
+            }.awaitAll()
+            val successes = results.count { it.isSuccess }
+            _memoryState.update {
+                it.copy(
+                    concurrencyTest = ConcurrencyTest(
+                        productId = productId,
+                        result = "Éxitos: $successes · Rechazos: ${attempts - successes}"
+                    )
+                )
             }
         }
     }
 
     fun consumeMessage() {
-        memoryState.update { it.copy(message = null) }
+        _memoryState.update { it.copy(message = null) }
     }
 
-    /** Consulta la tabla dentro del Mutex para evitar toques consecutivos inconsistentes. */
+    private fun showMessage(message: String) {
+        _memoryState.update { it.copy(message = message) }
+    }
+
     fun toggleFavorite(productId: String) {
         viewModelScope.launch {
-            writeMutex.withLock {
-                if (favoriteDao.isFavorite(productId)) {
-                    favoriteDao.delete(productId)
-                } else {
-                    favoriteDao.insert(FavoriteEntity(productId))
-                }
+            favoriteRepository.toggleFavorite(productId).onFailure {
+                showMessage("No pudimos guardar tu favorito.")
             }
         }
     }
 
     fun onCatalogSortOrderChange(order: CatalogSortOrder) {
         viewModelScope.launch {
-            preferences.saveCatalogSortOrder(order)
+            catalogPreferencesRepository.setSortOrder(order)
         }
     }
 
@@ -237,8 +339,7 @@ class StoreViewModel(application: Application) : AndroidViewModel(application) {
      * Inicia el envio del pedido al servidor y devuelve true si lo acepto. Vuelve a comprobar
      * el formulario y las unidades aunque el boton ya lo haga, porque deshabilitar un boton no
      * es validar. Reintentar es volver a llamarla: el pedido y el formulario siguen intactos.
-     * El recibo se calcula con el total anterior al vaciado. Un formulario invalido o un
-     * pedido vacio no altera ni el recibo ni las tablas. Los favoritos quedan intactos.
+     * Confirmar no cambia las existencias: las unidades ya se reservaron al agregarlas.
      */
     fun confirmOrder(): Boolean {
         // Evita el doble envio: mientras se espera al servidor, otro toque no hace nada.
@@ -248,32 +349,21 @@ class StoreViewModel(application: Application) : AndroidViewModel(application) {
         val store = uiState.value
         if (!form.isFormValid || store.orderUnitCount == 0) return false
 
-        val request = buildNewOrderDto(
-            items = store.orderItems,
-            billingType = form.billingType,
-            paymentMethod = form.paymentMethod,
-            createdAt = System.currentTimeMillis()
-        )
         _submissionState.value = OrderSubmissionState.Sending
-
         viewModelScope.launch {
-            _submissionState.value = try {
-                val created = orderApi.createOrder(request)
-                // El pedido se vacia solo despues de que el servidor confirma que lo guardo.
-                completeConfirmedOrder(form, store)
-                OrderSubmissionState.Sent(created.id)
-            } catch (e: IOException) {
-                Log.w(TAG, "No hubo respuesta al enviar el pedido", e)
-                OrderSubmissionState.Failed("No pudimos enviar tu pedido. Revisa tu conexión.")
-            } catch (e: HttpException) {
-                Log.w(TAG, "El servidor respondio ${e.code()} al enviar el pedido", e)
-                OrderSubmissionState.Failed(
-                    "El servidor no pudo recibir tu pedido. Intenta de nuevo en un momento."
-                )
-            } catch (e: SerializationException) {
-                Log.w(TAG, "Respuesta inesperada al enviar el pedido", e)
-                OrderSubmissionState.Failed("Recibimos una respuesta inesperada del servidor.")
-            }
+            val result = placedOrderRepository.placeOrder(
+                items = store.orderItems,
+                billingType = form.billingType,
+                paymentMethod = form.paymentMethod
+            )
+            _submissionState.value = result.fold(
+                onSuccess = { orderId ->
+                    // El pedido se vacia solo despues de que el servidor confirma que lo guardo.
+                    completeConfirmedOrder(form, store)
+                    OrderSubmissionState.Sent(orderId)
+                },
+                onFailure = { error -> OrderSubmissionState.Failed(submissionErrorMessage(error.dataErrorReason)) }
+            )
         }
         return true
     }
@@ -296,131 +386,52 @@ class StoreViewModel(application: Application) : AndroidViewModel(application) {
             totalCents = store.orderTotalCents
         )
 
-        memoryState.update { it.copy(lastReceipt = receipt, message = null) }
+        _memoryState.update { it.copy(lastReceipt = receipt, message = null) }
         _checkoutUiState.value = CheckoutUiState()
         viewModelScope.launch {
-            writeMutex.withLock {
-                orderLineDao.deleteAll()
+            orderMutex.withLock {
+                currentOrderRepository.clear()
             }
         }
-        return true
+    }
+
+    private fun reservationErrorMessage(productId: String, reason: DataErrorReason): String {
+        val name = uiState.value.productById(productId)?.name ?: "El producto"
+        return when (reason) {
+            DataErrorReason.OUT_OF_STOCK -> "$name está agotado: otra persona reservó la última unidad. El pedido no cambió."
+            DataErrorReason.NO_CONNECTION -> "Sin conexión no podemos reservar la unidad. El pedido no cambió."
+            DataErrorReason.NOT_FOUND -> "$name ya no existe en el catálogo. El pedido no cambió."
+            else -> "No pudimos reservar la unidad. El pedido no cambió."
+        }
+    }
+
+    companion object {
+        val Factory: ViewModelProvider.Factory = viewModelFactory {
+            initializer {
+                val application =
+                    this[ViewModelProvider.AndroidViewModelFactory.APPLICATION_KEY] as BrewShopApplication
+                val container = application.container
+                StoreViewModel(
+                    sessionRepository = container.sessionRepository,
+                    productRepository = container.productRepository,
+                    favoriteRepository = container.favoriteRepository,
+                    currentOrderRepository = container.currentOrderRepository,
+                    catalogPreferencesRepository = container.catalogPreferencesRepository,
+                    placedOrderRepository = container.placedOrderRepository
+                )
+            }
+        }
     }
 }
 
-private val initialRoasters = listOf(
-    Roaster(
-        id = "r1",
-        name = "Tostaduria La Bendicion",
-        role = "Tostador artesanal",
-        location = "Antigua Guatemala, Sacatepequez",
-        description = "Taller familiar de tercera generacion. Tuesta en lotes de ocho " +
-            "kilos y deja descansar cada lote cinco dias antes de venderlo, para que los " +
-            "azucares del grano terminen de asentarse."
-    ),
-    Roaster(
-        id = "r2",
-        name = "Xelaju Roasters",
-        role = "Micro-tostador de altura",
-        location = "Quetzaltenango",
-        description = "Compra directamente a doce productores del altiplano y paga sobre " +
-            "el precio de bolsa. Trabaja tuestes claros para que se note el origen de " +
-            "cada finca en la taza."
-    ),
-    Roaster(
-        id = "r3",
-        name = "Cardamomo Cafe",
-        role = "Tostador de origen unico",
-        location = "Coban, Alta Verapaz",
-        description = "Nacio dentro de una finca de cardamomo y hoy tuesta solo lotes de " +
-            "las Verapaces. Publica la fecha de tueste de cada bolsa."
-    ),
-    Roaster(
-        id = "r4",
-        name = "Volcan Tostadores",
-        role = "Tostador experimental",
-        location = "Ciudad de Guatemala",
-        description = "Trabaja procesos anaerobicos y fermentaciones controladas. Cada " +
-            "lote lleva la ficha de su fermentacion en la etiqueta."
-    ),
-    Roaster(
-        id = "r5",
-        name = "Finca Los Cipreses",
-        role = "Productor que tuesta su cosecha",
-        location = "Acatenango, Chimaltenango",
-        description = "Cultiva, despulpa y tuesta en la misma finca. Vende unicamente lo " +
-            "que produce, asi que su catalogo cambia con cada cosecha."
-    ),
-    Roaster(
-        id = "r6",
-        name = "Ruta del Altiplano",
-        role = "Tostador cooperativo",
-        location = "San Marcos",
-        description = "Reune a cuarenta pequenos caficultores de la boca costa. El " +
-            "excedente de cada venta regresa a la cooperativa."
-    )
-)
+private fun catalogErrorMessage(reason: DataErrorReason): String = when (reason) {
+    DataErrorReason.NO_CONNECTION -> "No pudimos cargar el catálogo. Revisa tu conexión."
+    DataErrorReason.NOT_SIGNED_IN -> "No pudimos iniciar tu sesión para ver el catálogo."
+    else -> "No pudimos cargar el catálogo. Intenta de nuevo."
+}
 
-/**
- * Productos originales del laboratorio 09. Conservan sus IDs y su relacion con el
- * tostador; solo se les agregaron existencias e imagen. Las existencias estan elegidas
- * para que el catalogo empiece con un caso agotado, uno de exactamente 3 unidades y dos
- * con mas, que son los casos que pide comprobar el pedido.
- */
-private val originalCoffees = listOf(
-    Coffee(
-        id = "c1",
-        name = "Bourbon Antigua",
-        description = "Clasico de valle volcanico: cuerpo redondo y dulzor de panela.",
-        priceCents = 7200,
-        stock = 12,
-        imageUrl = imageUrlFor("c1"),
-        roasterId = "r1",
-        origin = "Finca El Pilar, Antigua",
-        altitude = "1,550 msnm",
-        process = "Lavado",
-        roastLevel = "Tueste medio",
-        tastingNotes = "Panela, cacao y naranja madura"
-    ),
-    Coffee(
-        id = "c2",
-        name = "Geisha Huehuetenango",
-        description = "Taza floral y delicada, la mas aromatica del catalogo.",
-        priceCents = 14500,
-        stock = 3,
-        imageUrl = imageUrlFor("c2"),
-        roasterId = "r2",
-        origin = "La Libertad, Huehuetenango",
-        altitude = "1,900 msnm",
-        process = "Lavado",
-        roastLevel = "Tueste claro",
-        tastingNotes = "Jazmin, durazno y bergamota"
-    ),
-    Coffee(
-        id = "c3",
-        name = "Caturra Atitlan",
-        description = "Equilibrado y cremoso, pensado para prensa francesa.",
-        priceCents = 6800,
-        stock = 0,
-        imageUrl = imageUrlFor("c3"),
-        roasterId = "r1",
-        origin = "San Juan La Laguna, Solola",
-        altitude = "1,650 msnm",
-        process = "Honey",
-        roastLevel = "Tueste medio",
-        tastingNotes = "Almendra, miel y manzana roja"
-    ),
-    Coffee(
-        id = "c4",
-        name = "Pacamara Coban",
-        description = "Grano grande de proceso natural, dulce y afrutado.",
-        priceCents = 9800,
-        stock = 7,
-        imageUrl = imageUrlFor("c4"),
-        roasterId = "r2",
-        origin = "Coban, Alta Verapaz",
-        altitude = "1,400 msnm",
-        process = "Natural",
-        roastLevel = "Tueste claro",
-        tastingNotes = "Fresa, cacao con leche y vainilla"
-    )
-)
+private fun submissionErrorMessage(reason: DataErrorReason): String = when (reason) {
+    DataErrorReason.NO_CONNECTION -> "No pudimos enviar tu pedido. Revisa tu conexión."
+    DataErrorReason.UNEXPECTED_RESPONSE -> "Recibimos una respuesta inesperada del servidor."
+    else -> "El servidor no pudo recibir tu pedido. Intenta de nuevo en un momento."
+}

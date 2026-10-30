@@ -1,33 +1,29 @@
 package gt.uvg.brewshop.ui.orders
 
-import android.util.Log
 import androidx.lifecycle.ViewModel
+import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
-import gt.uvg.brewshop.network.StoreApi
-import gt.uvg.brewshop.network.toPlacedOrder
-import java.io.IOException
+import androidx.lifecycle.viewmodel.initializer
+import androidx.lifecycle.viewmodel.viewModelFactory
+import gt.uvg.brewshop.BrewShopApplication
+import gt.uvg.brewshop.data.PlacedOrderRepository
+import gt.uvg.brewshop.model.DataErrorReason
+import gt.uvg.brewshop.model.dataErrorReason
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
-import kotlinx.serialization.SerializationException
-import retrofit2.HttpException
-
-private const val TAG = "OrdersViewModel"
-private const val ORDERS_SORT_FIELD = "createdAt"
-private const val ORDERS_SORT_DIRECTION = "desc"
 
 /**
- * ViewModel de la feature "Mis pedidos", separada de la tienda.
+ * ViewModel de la feature "Mis pedidos", separada de la tienda. Recibe su Repository por
+ * constructor y no sabe que los pedidos viven en MockAPI.
  *
  * Las cargas no se lanzan en init ni desde la UI: responden al evento que abre cada pantalla
  * o a un reintento. Por eso rotar no repite la solicitud, y un pedido recien enviado aparece
  * al abrir la lista, que siempre se pide de nuevo.
  */
-class OrdersViewModel : ViewModel() {
-
-    private val orderApi = StoreApi.orderApi
+class OrdersViewModel(private val placedOrderRepository: PlacedOrderRepository) : ViewModel() {
 
     private val _ordersUiState = MutableStateFlow<OrdersUiState>(OrdersUiState.Loading)
     val ordersUiState: StateFlow<OrdersUiState> = _ordersUiState.asStateFlow()
@@ -43,27 +39,20 @@ class OrdersViewModel : ViewModel() {
         if (ordersJob?.isActive == true) return
         ordersJob = viewModelScope.launch {
             _ordersUiState.value = OrdersUiState.Loading
-            _ordersUiState.value = try {
-                // El orden lo resuelve el servidor, no la app.
-                val orders = orderApi
-                    .getOrders(sortBy = ORDERS_SORT_FIELD, order = ORDERS_SORT_DIRECTION)
-                    .map { it.toPlacedOrder() }
-                if (orders.isEmpty()) OrdersUiState.Empty else OrdersUiState.Success(orders)
-            } catch (e: IOException) {
-                Log.w(TAG, "Sin respuesta al cargar los pedidos", e)
-                OrdersUiState.Error("No pudimos cargar tus pedidos. Revisa tu conexión.")
-            } catch (e: HttpException) {
-                Log.w(TAG, "El servidor respondio ${e.code()} al cargar los pedidos", e)
-                // MockAPI responde 404 en vez de una lista vacia cuando un filtro no coincide.
-                if (e.code() == 404) {
-                    OrdersUiState.Empty
-                } else {
-                    OrdersUiState.Error("El servidor no pudo mostrar tus pedidos.")
+            _ordersUiState.value = placedOrderRepository.getOrders().fold(
+                onSuccess = { orders ->
+                    if (orders.isEmpty()) OrdersUiState.Empty else OrdersUiState.Success(orders)
+                },
+                onFailure = { error ->
+                    OrdersUiState.Error(
+                        when (error.dataErrorReason) {
+                            DataErrorReason.NO_CONNECTION -> "No pudimos cargar tus pedidos. Revisa tu conexión."
+                            DataErrorReason.UNEXPECTED_RESPONSE -> "Recibimos una respuesta inesperada del servidor."
+                            else -> "El servidor no pudo mostrar tus pedidos."
+                        }
+                    )
                 }
-            } catch (e: SerializationException) {
-                Log.w(TAG, "Respuesta inesperada al cargar los pedidos", e)
-                OrdersUiState.Error("Recibimos una respuesta inesperada del servidor.")
-            }
+            )
         }
     }
 
@@ -72,21 +61,28 @@ class OrdersViewModel : ViewModel() {
         detailJob?.cancel()
         detailJob = viewModelScope.launch {
             _orderDetailUiState.value = OrderDetailUiState.Loading
-            _orderDetailUiState.value = try {
-                OrderDetailUiState.Success(orderApi.getOrder(orderId).toPlacedOrder())
-            } catch (e: IOException) {
-                Log.w(TAG, "Sin respuesta al cargar el pedido $orderId", e)
-                OrderDetailUiState.Error("No pudimos cargar el pedido. Revisa tu conexión.")
-            } catch (e: HttpException) {
-                Log.w(TAG, "El servidor respondio ${e.code()} al cargar el pedido $orderId", e)
-                if (e.code() == 404) {
-                    OrderDetailUiState.NotFound
-                } else {
-                    OrderDetailUiState.Error("El servidor no pudo mostrar el pedido.")
+            _orderDetailUiState.value = placedOrderRepository.getOrder(orderId).fold(
+                onSuccess = { order -> OrderDetailUiState.Success(order) },
+                onFailure = { error ->
+                    when (error.dataErrorReason) {
+                        DataErrorReason.NOT_FOUND -> OrderDetailUiState.NotFound
+                        DataErrorReason.NO_CONNECTION ->
+                            OrderDetailUiState.Error("No pudimos cargar el pedido. Revisa tu conexión.")
+                        DataErrorReason.UNEXPECTED_RESPONSE ->
+                            OrderDetailUiState.Error("Recibimos una respuesta inesperada del servidor.")
+                        else -> OrderDetailUiState.Error("El servidor no pudo mostrar el pedido.")
+                    }
                 }
-            } catch (e: SerializationException) {
-                Log.w(TAG, "Respuesta inesperada al cargar el pedido $orderId", e)
-                OrderDetailUiState.Error("Recibimos una respuesta inesperada del servidor.")
+            )
+        }
+    }
+
+    companion object {
+        val Factory: ViewModelProvider.Factory = viewModelFactory {
+            initializer {
+                val application =
+                    this[ViewModelProvider.AndroidViewModelFactory.APPLICATION_KEY] as BrewShopApplication
+                OrdersViewModel(application.container.placedOrderRepository)
             }
         }
     }

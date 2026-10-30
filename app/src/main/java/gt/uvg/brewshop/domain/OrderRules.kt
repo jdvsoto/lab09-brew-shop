@@ -28,11 +28,12 @@ data class OrderItem(
  *
  * Es la regla de negocio del laboratorio y es independiente de Compose: valida aunque se
  * invoque sin botones ni pantalla. Rechaza, sin tocar el pedido, cuando la cantidad no es
- * positiva, cuando el producto no existe en el catalogo, cuando esta agotado y cuando la
- * cantidad acumulada superaria las existencias. Deshabilitar un boton en la UI no
- * sustituye esta validacion.
+ * positiva, cuando el producto no existe en el catalogo y cuando no quedan existencias.
+ * Deshabilitar un boton en la UI no sustituye esta validacion.
  *
- * Preparar el pedido no descuenta inventario: [Coffee.stock] es el limite, no un saldo.
+ * Desde el laboratorio final, agregar reserva la unidad en el servidor: [Coffee.stock] es lo
+ * que todavia queda disponible, ya descontadas las unidades de este pedido. Esta revision usa
+ * el ultimo valor recibido; la transaccion del servidor es la que decide de verdad.
  */
 fun addToOrder(
     lines: List<OrderLine>,
@@ -50,14 +51,14 @@ fun addToOrder(
     if (product.stock <= 0) {
         return OrderResult.Rejected("${product.name} esta agotado. El pedido no cambio.")
     }
-
-    val currentQuantity = quantityOf(lines, productId)
-    val newQuantity = currentQuantity + quantity
-    if (newQuantity > product.stock) {
+    if (quantity > product.stock) {
         return OrderResult.Rejected(
             "Solo hay ${product.stock} unidades disponibles. El pedido no cambio."
         )
     }
+
+    val currentQuantity = quantityOf(lines, productId)
+    val newQuantity = currentQuantity + quantity
 
     // El mismo producto acumula en su linea existente en lugar de abrir otra.
     val updatedLines = if (currentQuantity == 0) {

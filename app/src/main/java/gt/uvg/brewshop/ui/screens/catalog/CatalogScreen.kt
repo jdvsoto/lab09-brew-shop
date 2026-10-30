@@ -1,7 +1,6 @@
 package gt.uvg.brewshop.ui.screens.catalog
 
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -35,6 +34,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import gt.uvg.brewshop.model.CatalogSortOrder
@@ -43,6 +43,7 @@ import gt.uvg.brewshop.ui.components.OrderAccessAction
 import gt.uvg.brewshop.ui.components.ProductCard
 import gt.uvg.brewshop.ui.components.StoreScaffold
 import gt.uvg.brewshop.ui.components.displayName
+import gt.uvg.brewshop.ui.store.CatalogStatus
 import gt.uvg.brewshop.ui.theme.BrewShopTheme
 import kotlinx.coroutines.launch
 
@@ -82,8 +83,9 @@ fun CatalogScreen(
     onOpenOrder: () -> Unit,
     onOpenOrders: () -> Unit,
     sortOrder: CatalogSortOrder,
-    isLoaded: Boolean,
+    catalogStatus: CatalogStatus,
     onSortOrderChange: (CatalogSortOrder) -> Unit,
+    onRetryCatalog: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val coroutineScope = rememberCoroutineScope()
@@ -155,14 +157,31 @@ fun CatalogScreen(
                 }
             }
 
-            if (!isLoaded) {
-                // Hasta que llegan los datos guardados en disco no se muestra la cuadricula:
-                // se veria un instante en el orden por defecto y sin pedido.
-                Box(
+            if (catalogStatus is CatalogStatus.Loading) {
+                Column(
                     modifier = Modifier.fillMaxSize(),
-                    contentAlignment = Alignment.Center
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterVertically)
                 ) {
                     CircularProgressIndicator()
+                    Text("Cargando catálogo…", style = MaterialTheme.typography.bodyLarge)
+                }
+            } else if (catalogStatus is CatalogStatus.Error) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(24.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterVertically)
+                ) {
+                    Text(
+                        text = catalogStatus.message,
+                        style = MaterialTheme.typography.bodyLarge,
+                        textAlign = TextAlign.Center
+                    )
+                    Button(onClick = onRetryCatalog) {
+                        Text("Reintentar")
+                    }
                 }
             } else if (hasNoResults) {
                 Column(
@@ -243,10 +262,11 @@ private fun CatalogScreenPreview() {
             onOpenCoffee = {},
             onToggleFavorite = {},
             onOpenOrder = {},
-            onOpenOrders = {}
+            onOpenOrders = {},
             sortOrder = CatalogSortOrder.NAME,
-            isLoaded = true,
-            onSortOrderChange = {}
+            catalogStatus = CatalogStatus.Ready,
+            onSortOrderChange = {},
+            onRetryCatalog = {}
         )
     }
 }
